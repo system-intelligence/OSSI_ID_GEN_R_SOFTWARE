@@ -1,0 +1,20 @@
+# Rust build output and Tauri generated schemas
+src-tauri/target/
+src-tauri/gen/
+
+# Runtime data - employee records, PIN and generated cards must never be committed
+data/
+ID/
+*.db
+*.db-journal
+pin-config.json
+
+# Real signature of the authorized representative - keep it out of the repository
+VP-SIGNATURE.png
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
