@@ -27,6 +27,8 @@ pub struct IdRecord<'a> {
     pub contact: &'a str,
     pub is_rehire: bool,
     pub control_number: &'a str,
+    // Generated SVG, relative to the ID/ folder, e.g. 260627ANG-0950_DELA CRUZ_JUAN/front-id.svg
+    pub file_path: &'a str,
 }
 
 fn or_null(value: &str) -> Option<&str> {
@@ -129,6 +131,7 @@ impl Db {
             [],
         )?;
         add_column(&conn, "ALTER TABLE id_records ADD COLUMN relationship TEXT");
+        add_column(&conn, "ALTER TABLE id_records ADD COLUMN file_path TEXT");
         Ok(())
     }
 
@@ -185,8 +188,8 @@ impl Db {
     pub fn save_id_record(&self, record_type: &str, r: &IdRecord) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT INTO id_records
-             (type, id_number, first_name, last_name, middle_initial, suffix, position, employee_name, hire_date, city_of_birth, city_code, address1, address2, relationship, contact, is_rehire, control_number, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (type, id_number, first_name, last_name, middle_initial, suffix, position, employee_name, hire_date, city_of_birth, city_code, address1, address2, relationship, contact, is_rehire, control_number, created_at, file_path)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 or_null(record_type).unwrap_or("front"),
                 None::<&str>,
@@ -206,9 +209,23 @@ impl Db {
                 r.is_rehire as i32,
                 or_null(r.control_number),
                 now_iso(),
+                or_null(r.file_path),
             ],
         )?;
         Ok(())
+    }
+
+    // Most recently saved file of one side ("front" / "back") of a card, relative to the ID/ folder
+    pub fn latest_card_file(&self, control_number: &str, record_type: &str) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT file_path FROM id_records
+                 WHERE control_number = ? AND type = ? AND file_path IS NOT NULL
+                 ORDER BY created_at DESC LIMIT 1",
+                params![control_number, record_type],
+                |row| row.get(0),
+            )
+            .optional()
     }
 
     // Every column of every record, newest first, as JSON objects keyed by column name

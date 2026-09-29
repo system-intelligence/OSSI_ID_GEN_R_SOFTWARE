@@ -18,6 +18,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fastrand = "2"
+# crop / pad the ID photo and signature to their card boxes (CorelDRAW ignores SVG preserveAspectRatio)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [profile.release]
 codegen-units = 1

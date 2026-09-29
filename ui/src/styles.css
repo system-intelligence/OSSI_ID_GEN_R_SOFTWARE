@@ -423,6 +423,114 @@ input[type="text"]:focus {
     font-size: 1.2rem;
 }
 
+/* ---------- Contact number ---------- */
+
+.label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.label-row label {
+    margin-bottom: 0;
+}
+
+.segmented {
+    display: inline-flex;
+    padding: 2px;
+    background: #eef0f4;
+    border-radius: 7px;
+}
+
+.seg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.seg-btn:hover:not(.active) {
+    color: var(--text-color);
+}
+
+.seg-btn.active {
+    background: white;
+    color: var(--primary-color);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+}
+
+.seg-btn:focus-visible {
+    outline: 2px solid var(--secondary-color);
+    outline-offset: 1px;
+}
+
+.phone-input {
+    display: flex;
+    align-items: stretch;
+    border: 1.5px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: white;
+    overflow: hidden;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.phone-input:hover {
+    border-color: var(--border-strong);
+}
+
+.phone-input:focus-within {
+    border-color: var(--secondary-color);
+    box-shadow: var(--focus-ring);
+}
+
+.phone-input.invalid {
+    border-color: var(--danger-color);
+    box-shadow: 0 0 0 4px rgba(198, 40, 40, 0.1);
+}
+
+.phone-prefix {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    background: var(--surface-muted);
+    border-right: 1.5px solid var(--border-color);
+    color: var(--text-color);
+    font-weight: 600;
+    user-select: none;
+}
+
+.phone-prefix[hidden] {
+    display: none;
+}
+
+.phone-input input[type="text"] {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    letter-spacing: 0.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+.phone-input input[type="text"]:focus,
+.phone-input input[type="text"]:hover {
+    box-shadow: none;
+}
+
+.field-hint.error {
+    color: var(--danger-color);
+}
+
 /* ---------- Custom select ---------- */
 
 .select-wrapper {
@@ -1255,4 +1363,201 @@ input[type="text"]:focus {
 
 .records-empty p {
     font-size: 0.88rem;
+}
+
+/* ---------- Records: View button ---------- */
+
+#records-table .group-actions,
+#records-table .actions-header {
+    background: #f4f5f9;
+}
+
+#records-table .group-actions,
+#records-table .actions-header,
+#records-table .cell-actions {
+    position: sticky;
+    right: 0;
+    text-align: center;
+    box-shadow: -6px 0 8px -6px rgba(15, 23, 42, 0.15);
+}
+
+/* Header corner cells sit above both the scrolling rows and the other headers */
+#records-table thead .group-actions,
+#records-table thead .actions-header {
+    z-index: 3;
+}
+
+/* Solid colours so rows scrolling underneath the sticky column don't show through */
+#records-table .cell-actions {
+    background: white;
+    z-index: 1;
+}
+
+#records-table tbody tr:nth-child(even) .cell-actions {
+    background: #fafbfd;
+}
+
+#records-table tbody tr:hover .cell-actions {
+    background: #f1f6fd;
+}
+
+.view-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1.5px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: white;
+    color: var(--primary-color);
+    font-family: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.view-btn:hover:not(:disabled) {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.view-btn:disabled {
+    color: #b8bec9;
+    cursor: not-allowed;
+}
+
+/* ---------- ID preview modal ---------- */
+
+.preview-card {
+    background: white;
+    border-radius: var(--radius);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+    width: 100%;
+    max-width: 1000px;
+    max-height: calc(100vh - 40px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: fadeIn 0.2s;
+}
+
+.preview-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.preview-header h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.preview-close {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.preview-close:hover {
+    background: var(--surface-muted);
+    color: var(--text-color);
+}
+
+.preview-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 20px 22px;
+    background: var(--surface-muted);
+    overflow: auto;
+}
+
+.preview-side figcaption {
+    margin-bottom: 8px;
+}
+
+.preview-frame {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 320px;
+    padding: 16px;
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.preview-frame img {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 260px);
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.18);
+    border-radius: 4px;
+}
+
+.preview-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.preview-placeholder i {
+    font-size: 2rem;
+    color: #cfd4dd;
+}
+
+.preview-placeholder.error,
+.preview-placeholder.error i {
+    color: var(--danger-color);
+}
+
+.preview-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 22px;
+    border-top: 1px solid var(--border-color);
+}
+
+.preview-note {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.preview-footer .modal-btn {
+    flex: 0 0 auto;
+}
+
+.preview-footer .modal-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+@media (max-width: 768px) {
+    .preview-body {
+        grid-template-columns: 1fr;
+    }
+
+    .preview-footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }

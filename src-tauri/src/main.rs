@@ -5,11 +5,13 @@
 mod cities;
 mod db;
 mod format;
+mod images;
 mod paths;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::{json, Value};
 use std::fs;
+use std::path::{Component, Path, PathBuf};
 use tauri::{Manager, State};
 
 use db::{Db, IdRecord};
@@ -154,7 +156,7 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
     let err = |e: rusqlite::Error| e.to_string();
     let template;
     let replacements: Vec<(&str, String)>;
-    let output_dir;
+    let folder: String;
     let file_name;
     let mut issued_control_number = Value::Null;
 
@@ -189,14 +191,15 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
         }
 
         replacements = vec![
-            ("{{ID_PICTURE}}", text(data, "idPicture").to_string()),
-            ("{{SIGNATURE_PICTURE}}", text(data, "signaturePicture").to_string()),
+            // Box sizes match the <image> elements in templates/front-id.svg
+            ("{{ID_PICTURE}}", images::photo_for_box(text(data, "idPicture"), 972.0, 982.0)),
+            ("{{SIGNATURE_PICTURE}}", images::signature_for_box(text(data, "signaturePicture"), 1125.0, 250.0)),
             ("{{CONTROL_NUMBER}}", control_number.clone()),
             ("{{LAST_NAME}}", last_name_with_suffix.to_uppercase()),
             ("{{FIRST_NAME}}", first_name_with_middle.to_uppercase()),
             ("{{POSITION}}", text(data, "position").to_string()),
         ];
-        output_dir = state.paths.id_output.join(format!("{control_number}_{last_name}_{first_name}"));
+        folder = format!("{control_number}_{last_name}_{first_name}");
         file_name = "front-id.svg";
         issued_control_number = Value::String(control_number.clone());
 
@@ -213,6 +216,7 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
                 city_code: &city_code,
                 is_rehire,
                 control_number: &control_number,
+                file_path: &format!("{folder}/{file_name}"),
                 ..Default::default()
             },
         )
@@ -228,6 +232,8 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
         let city_code = if city_of_birth.is_empty() { None } else { db.get_city_code(city_of_birth).map_err(err)? };
         let authorized_signature = load_authorized_signature(state)?;
         let (address1, address2) = (text(data, "addressLine1"), text(data, "addressLine2"));
+        folder = format!("{control_number}_{}_{}", text(data, "surname"), text(data, "firstName"));
+        file_name = "back-id.svg";
 
         db.save_id_record(
             "back",
@@ -244,6 +250,7 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
                 contact: text(data, "contact"),
                 is_rehire: flag(data, "isRehire"),
                 control_number,
+                file_path: &format!("{folder}/{file_name}"),
                 ..Default::default()
             },
         )
@@ -257,11 +264,6 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
             ("{{CONTACT_NO}}", format_contact_number(text(data, "contact"))),
             ("{{AUTHORIZED_SIGNATURE}}", authorized_signature),
         ];
-        output_dir = state
-            .paths
-            .id_output
-            .join(format!("{control_number}_{}_{}", text(data, "surname"), text(data, "firstName")));
-        file_name = "back-id.svg";
     }
 
     let mut svg = fs::read_to_string(template).map_err(|e| format!("{e}: {}", template.display()))?;
@@ -269,6 +271,7 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
         svg = svg.replace(key, value);
     }
 
+    let output_dir = state.paths.id_output.join(&folder);
     fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
     let save_path = output_dir.join(file_name);
     fs::write(&save_path, &svg).map_err(|e| e.to_string())?;
@@ -284,6 +287,78 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
 #[tauri::command]
 fn generate_svg(state: State<AppState>, data: Value) -> Value {
     generate_card(&state, &data).unwrap_or_else(|error| json!({ "success": false, "error": error }))
+}
+
+// ---------- viewing generated cards from Records ----------
+
+// A stored file_path may only point inside ID/ (plain folder/file names, no "..", drive or root)
+fn is_safe_relative(path: &Path) -> bool {
+    path.components().all(|c| matches!(c, Component::Normal(_)))
+}
+
+// The saved SVG for one side of a card: the path recorded in the database, or - for cards made before
+// paths were recorded, or folders that were renamed - the newest <control number>_*/<file> under ID/
+fn find_card_file(state: &AppState, control_number: &str, record_type: &str, file_name: &str) -> Option<PathBuf> {
+    let id_output = &state.paths.id_output;
+    if let Ok(Some(relative)) = state.db.latest_card_file(control_number, record_type) {
+        let relative = PathBuf::from(relative);
+        if is_safe_relative(&relative) && id_output.join(&relative).is_file() {
+            return Some(id_output.join(relative));
+        }
+    }
+    let folder_prefix = format!("{control_number}_");
+    fs::read_dir(id_output)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&folder_prefix))
+        .map(|entry| entry.path().join(file_name))
+        .filter_map(|path| Some((fs::metadata(&path).ok()?.modified().ok()?, path)))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+fn card_side(path: Option<PathBuf>) -> Value {
+    let Some(path) = path else { return Value::Null };
+    match fs::read(&path) {
+        Ok(svg) => json!({
+            "svgData": format!("data:image/svg+xml;base64,{}", BASE64.encode(svg)),
+            "path": path.display().to_string(),
+        }),
+        Err(_) => Value::Null,
+    }
+}
+
+#[tauri::command]
+fn get_card_preview(state: State<AppState>, control_number: String) -> Value {
+    if control_number.trim().is_empty() {
+        return json!({ "success": false, "error": "This record has no control number" });
+    }
+    json!({
+        "success": true,
+        "front": card_side(find_card_file(&state, &control_number, "front", "front-id.svg")),
+        "back": card_side(find_card_file(&state, &control_number, "back", "back-id.svg")),
+    })
+}
+
+#[tauri::command]
+fn open_card_folder(state: State<AppState>, control_number: String) -> Value {
+    let folder = find_card_file(&state, &control_number, "front", "front-id.svg")
+        .or_else(|| find_card_file(&state, &control_number, "back", "back-id.svg"))
+        .and_then(|file| file.parent().map(Path::to_path_buf));
+    let Some(folder) = folder else {
+        return json!({ "success": false, "error": "Card folder not found in the ID folder" });
+    };
+    #[cfg(windows)]
+    let opener = "explorer";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let opener = "xdg-open";
+    // explorer.exe reports a non-zero exit code even when it opens the folder, so only a failed launch is an error
+    match std::process::Command::new(opener).arg(&folder).spawn() {
+        Ok(_) => json!({ "success": true }),
+        Err(err) => json!({ "success": false, "error": err.to_string() }),
+    }
 }
 
 fn main() {
@@ -304,7 +379,9 @@ fn main() {
             generate_control_number,
             get_all_records,
             reset_database,
-            generate_svg
+            generate_svg,
+            get_card_preview,
+            open_card_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running ID Card Generator");
@@ -344,6 +421,14 @@ mod tests {
             .collect();
         results.push(json!({ "label": "records", "records": state.db.get_all_id_records().unwrap() }));
         fs::write(base.join("results.json"), serde_json::to_string_pretty(&results).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn stored_card_paths_stay_inside_id_folder() {
+        assert!(is_safe_relative(Path::new("260627ANG-0950_DELA CRUZ_JUAN/front-id.svg")));
+        assert!(!is_safe_relative(Path::new("../data/id-generator.db")));
+        assert!(!is_safe_relative(Path::new("C:/Windows/win.ini")));
+        assert!(!is_safe_relative(Path::new("/etc/passwd")));
     }
 
     #[test]

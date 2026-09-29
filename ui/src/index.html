@@ -295,8 +295,22 @@
                                 </div>
                             </div>
                             <div class="field">
-                                <label for="back-contact">Contact Number</label>
-                                <input type="text" id="back-contact" placeholder="0917 123 4567" inputmode="tel">
+                                <div class="label-row">
+                                    <label for="back-contact">Contact Number</label>
+                                    <div class="segmented" role="radiogroup" aria-label="Number type">
+                                        <button type="button" class="seg-btn active" data-phone-type="mobile" role="radio" aria-checked="true">
+                                            <i class="fas fa-mobile-alt"></i> Mobile
+                                        </button>
+                                        <button type="button" class="seg-btn" data-phone-type="landline" role="radio" aria-checked="false">
+                                            <i class="fas fa-phone-alt"></i> Telephone
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="phone-input" id="phone-input">
+                                    <span class="phone-prefix" id="phone-prefix">+63</span>
+                                    <input type="text" id="back-contact" placeholder="917 123 4567" inputmode="tel" maxlength="12" autocomplete="off">
+                                </div>
+                                <span class="field-hint" id="phone-hint">10-digit mobile number starting with 9</span>
                             </div>
                             <div class="field">
                                 <label for="back-address1">Address Line 1</label>
@@ -344,6 +358,7 @@
                                     <tr class="group-row">
                                         <th colspan="9" class="group-employee">Employee</th>
                                         <th colspan="4" class="group-emergency">Emergency Contact</th>
+                                        <th class="group-actions"></th>
                                     </tr>
                                     <tr>
                                         <th data-sort="no">#</th>
@@ -359,6 +374,7 @@
                                         <th class="emergency-header" data-sort="relationship">Relationship</th>
                                         <th class="emergency-header" data-sort="contact">Contact No.</th>
                                         <th class="emergency-header" data-sort="address1">Address</th>
+                                        <th class="actions-header">View</th>
                                     </tr>
                                 </thead>
                                 <tbody></tbody>
@@ -428,6 +444,36 @@
             <div class="modal-actions">
                 <button id="resetPinCancelBtn" class="modal-btn modal-btn-cancel">Cancel</button>
                 <button id="resetPinConfirmBtn" class="modal-btn modal-btn-confirm">Verify PIN</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="previewModal" class="modal-overlay" style="display: none;">
+        <div class="preview-card" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+            <div class="preview-header">
+                <div>
+                    <h3 id="previewTitle">ID Preview</h3>
+                    <span class="control-chip" id="previewControl"></span>
+                </div>
+                <button class="preview-close" id="previewCloseBtn" aria-label="Close preview">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="preview-body">
+                <figure class="preview-side">
+                    <figcaption><span class="card-chip front">Front</span></figcaption>
+                    <div class="preview-frame" id="previewFront"></div>
+                </figure>
+                <figure class="preview-side">
+                    <figcaption><span class="card-chip back">Back</span></figcaption>
+                    <div class="preview-frame" id="previewBack"></div>
+                </figure>
+            </div>
+            <div class="preview-footer">
+                <span class="preview-note"><i class="fas fa-info-circle"></i> Showing the saved SVG files. Fonts may look slightly different in CorelDRAW.</span>
+                <button class="modal-btn modal-btn-cancel" id="previewFolderBtn">
+                    <i class="fas fa-folder-open"></i> Open Folder
+                </button>
             </div>
         </div>
     </div>

@@ -17,19 +17,19 @@
   <image x="665.1" y="533.6" width="683.6" height="82.7" preserveAspectRatio="none"
                 xlink:href="data:image/png;base64,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"/><!-- address line 2 -->
   <!-- ID Picture -->
-  <image id="id-pic" x="574" y="735" width="972" height="982" preserveAspectRatio="xMidYMid slice"
+  <image id="id-pic" x="574" y="735" width="972" height="982" preserveAspectRatio="none"
                 xlink:href="{{ID_PICTURE}}"
                 />
   <rect x="570" y="724" width="980" height="995" fill="none" stroke="#a8a8a8" stroke-width="8"/>
 
   <!-- Control number -->
-  <text x="50%" y="1820" font-family="Windsor BT, Times New Roman, serif"
-        font-size="140" fill="#221F20" text-anchor="middle" dominant-baseline="middle">{{CONTROL_NUMBER}}</text>
+  <text x="1062.5" y="1855" font-family="Windsor BT"
+        font-size="140" fill="#221F20" text-anchor="middle">{{CONTROL_NUMBER}}</text>
 
 <!-- LAST NAME block: baseline = bar center + half cap height (160 x 0.711 x 1.25 / 2) -->
 <rect x="0" y="1900" width="2125" height="305" fill="#0000b8"/>
 <g transform="translate(0,1942) scale(1,1.25)">
-  <text x="50%" y="145" font-family="Windsor BT, Times New Roman, serif"
+  <text x="1062.5" y="145" font-family="Windsor BT"
         font-size="160" fill="#ffffff" text-anchor="middle">{{LAST_NAME}}</text>
 </g>
 
@@ -37,29 +37,27 @@
   <!-- FIRST NAME block -->
 <rect x="0" y="2295" width="2125" height="273" fill="#0000b8"/>
 <g transform="translate(0,1942) scale(1,1.25)">
-  <text x="50%" y="448.5" font-family="Windsor BT, Times New Roman, serif"
+  <text x="1062.5" y="448.5" font-family="Windsor BT"
         font-size="160" fill="#ffffff" text-anchor="middle">{{FIRST_NAME}}</text>
 </g>
 
 
 <!-- Position + Subtext -->
 <g transform="scale(1,1.4)">
-  <text x="50%" y="1960" font-family="Windsor BT, Times New Roman, serif"
-        font-size="107" fill="#221F20" text-anchor="middle"
-        dominant-baseline="middle" alignment-baseline="middle">{{POSITION}}</text>
+  <text x="1062.5" y="1987" font-family="Windsor BT"
+        font-size="107" fill="#221F20" text-anchor="middle">{{POSITION}}</text>
 </g>
 
 
-  <text x="50%" y="2835" font-family="Arial" font-weight="bold"
-        font-size="85" fill="#221F20" text-anchor="middle" dominant-baseline="middle">POSITION</text>
+  <text x="1062.5" y="2857" font-family="Arial" font-weight="bold"
+        font-size="85" fill="#221F20" text-anchor="middle">POSITION</text>
 
 <line x1="240" y1="3050" x2="1875" y2="3050" stroke="#646464" stroke-width="10"/>
-  <text x="50%" y="3135" font-family="Arial" font-weight="bold"
-        font-size="74" fill="#221F20" text-anchor="middle" dominant-baseline="middle">
-    SIGNATURE OF INDIVIDUAL  </text>
+  <text x="1062.5" y="3154" font-family="Arial" font-weight="bold"
+        font-size="74" fill="#221F20" text-anchor="middle">SIGNATURE OF INDIVIDUAL</text>
   
   <!-- Signature line (on top) -->
-  <image id="signature-img" x="500" y="2850" width="1125" height="250" preserveAspectRatio="xMidYMid meet"
+  <image id="signature-img" x="500" y="2850" width="1125" height="250" preserveAspectRatio="none"
                 xlink:href="{{SIGNATURE_PICTURE}}"
                 />
 </svg>

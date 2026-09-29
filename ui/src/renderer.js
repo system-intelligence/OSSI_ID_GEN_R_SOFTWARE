@@ -13,11 +13,13 @@ const ipcRenderer = {
             case 'get-all-records': return invoke('get_all_records');
             case 'reset-database': return invoke('reset_database');
             case 'generate-svg': return invoke('generate_svg', { data: args[0] });
+            case 'get-card-preview': return invoke('get_card_preview', { controlNumber: args[0] });
+            case 'open-card-folder': return invoke('open_card_folder', { controlNumber: args[0] });
             default: return Promise.reject(new Error(`Unknown channel: ${channel}`));
         }
     }
 };
-const { looksLikeMobile, isValidMobile } = window.OssiPhone;
+const { formatMobileInput, formatLandlineInput, isValidMobileInput, isValidLandlineInput } = window.OssiPhone;
 
 const idPicInput = document.getElementById('idPicInput');
 const sigInput = document.getElementById('sigInput');
@@ -377,6 +379,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 wrapper.querySelector('.select-text').textContent = select.options[select.selectedIndex].textContent.trim();
             });
             if (backRehire) backRehire.checked = false;
+            setPhoneType('mobile');
             [preview, sigPreview].forEach(img => img.style.display = 'none');
             document.querySelectorAll('.placeholder-text').forEach(el => el.style.display = 'block');
             positionOtherInput.style.display = 'none';
@@ -629,6 +632,135 @@ function checkReady() {
     }
 }
 
+// ---------- Contact number: Mobile (+63 9XX XXX XXXX) or Telephone ((02) 8XXX XXXX) ----------
+
+const phoneInputBox = document.getElementById('phone-input');
+const phonePrefix = document.getElementById('phone-prefix');
+const phoneHint = document.getElementById('phone-hint');
+const phoneTypeButtons = document.querySelectorAll('[data-phone-type]');
+let phoneType = 'mobile';
+
+const PHONE_TYPES = {
+    mobile: {
+        format: formatMobileInput,
+        isValid: isValidMobileInput,
+        placeholder: '917 123 4567',
+        maxLength: 12,
+        hint: '10-digit mobile number starting with 9',
+        error: 'Must be 10 digits starting with 9, e.g. 917 123 4567'
+    },
+    landline: {
+        format: formatLandlineInput,
+        isValid: isValidLandlineInput,
+        placeholder: '(02) 8123 4567',
+        maxLength: 14,
+        hint: 'Include the area code: (02) for Metro Manila, e.g. (032) for Cebu',
+        error: 'Include the area code, e.g. (02) 8123 4567 or (032) 234 5678'
+    }
+};
+
+// Put the caret back after the same number of digits it followed before reformatting
+function caretAfterDigits(value, digitCount) {
+    if (digitCount <= 0) return value.search(/\d/) === -1 ? value.length : value.search(/\d/);
+    let seen = 0;
+    for (let i = 0; i < value.length; i++) {
+        if (/\d/.test(value[i]) && ++seen === digitCount) return i + 1;
+    }
+    return value.length;
+}
+
+function reformatContact(caretDigits) {
+    const formatted = PHONE_TYPES[phoneType].format(backContactInput.value);
+    const digitsBefore = backContactInput.value.replace(/\D/g, '').length;
+    const digitsAfter = formatted.replace(/\D/g, '').length;
+    backContactInput.value = formatted;
+    // A pasted 0 / 63 prefix was dropped, so digit positions no longer line up - go to the end
+    const caret = digitsAfter < digitsBefore ? formatted.length : caretAfterDigits(formatted, caretDigits);
+    if (document.activeElement === backContactInput) backContactInput.setSelectionRange(caret, caret);
+}
+
+function showContactHint(showError) {
+    const type = PHONE_TYPES[phoneType];
+    phoneHint.textContent = showError ? type.error : type.hint;
+    phoneHint.classList.toggle('error', showError);
+    phoneInputBox.classList.toggle('invalid', showError);
+}
+
+// Empty is allowed (the card then shows the PHONE NUMBER placeholder)
+function validateContactNumber() {
+    const value = backContactInput.value.trim();
+    const valid = !value || PHONE_TYPES[phoneType].isValid(value);
+    showContactHint(!valid);
+    return valid;
+}
+
+// Value sent to Rust: mobile as +63 9XX XXX XXXX (Rust prints +63 9XX-XXX-XXXX), telephone as typed
+function getContactNumber() {
+    const value = backContactInput.value.trim();
+    if (!value) return '';
+    return phoneType === 'mobile' ? `+63 ${value}` : value;
+}
+
+function setPhoneType(type) {
+    phoneType = type;
+    const config = PHONE_TYPES[type];
+    phoneTypeButtons.forEach(btn => {
+        const active = btn.dataset.phoneType === type;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-checked', String(active));
+    });
+    phonePrefix.hidden = type !== 'mobile';
+    backContactInput.placeholder = config.placeholder;
+    backContactInput.maxLength = config.maxLength;
+    // A mobile number means nothing as a landline (and vice versa), so only keep a number that fits the new type
+    backContactInput.value = config.isValid(backContactInput.value) ? config.format(backContactInput.value) : '';
+    showContactHint(false);
+}
+
+phoneTypeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        setPhoneType(btn.dataset.phoneType);
+        backContactInput.focus();
+    });
+});
+
+backContactInput.addEventListener('input', () => {
+    const caretDigits = backContactInput.value.slice(0, backContactInput.selectionStart).replace(/\D/g, '').length;
+    reformatContact(caretDigits);
+    if (phoneInputBox.classList.contains('invalid')) validateContactNumber();
+});
+
+// Backspace right after a space or bracket deletes the digit before it instead of getting stuck
+backContactInput.addEventListener('keydown', e => {
+    if (e.key !== 'Backspace') return;
+    const { selectionStart: start, selectionEnd: end, value } = backContactInput;
+    if (start !== end || start === 0 || /\d/.test(value[start - 1])) return;
+    e.preventDefault();
+    const digitsBefore = value.slice(0, start).replace(/\D/g, '').length;
+    if (digitsBefore === 0) return;
+    const digits = value.replace(/\D/g, '');
+    backContactInput.value = digits.slice(0, digitsBefore - 1) + digits.slice(digitsBefore);
+    reformatContact(digitsBefore - 1);
+});
+
+// Paste is handled here because maxlength would cut "+63 917 123 4567" short before it is reformatted.
+// A mobile number pasted while in Telephone mode switches to Mobile.
+backContactInput.addEventListener('paste', e => {
+    e.preventDefault();
+    const pasted = (e.clipboardData || window.clipboardData).getData('text');
+    if (phoneType === 'landline' && isValidMobileInput(pasted)) {
+        backContactInput.value = pasted;
+        setPhoneType('mobile');
+        return;
+    }
+    const { selectionStart: start, selectionEnd: end, value } = backContactInput;
+    backContactInput.value = value.slice(0, start) + pasted + value.slice(end);
+    backContactInput.value = PHONE_TYPES[phoneType].format(backContactInput.value);
+    if (phoneInputBox.classList.contains('invalid')) validateContactNumber();
+});
+
+backContactInput.addEventListener('blur', validateContactNumber);
+
 // ID Picture handling
 idPicInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -748,9 +880,11 @@ downloadBtn.addEventListener('click', async () => {
              isRehire: backRehire ? backRehire.checked : false
           };
     } else {
-        const contactValue = backContactInput.value.trim();
-        if (contactValue && looksLikeMobile(contactValue) && !isValidMobile(contactValue)) {
-            status.innerHTML = '<i class="fas fa-exclamation-circle"></i> <span id="status-text">Contact number is not a valid mobile number - it must be 11 digits, like 0917 123 4567</span>';
+        if (!validateContactNumber()) {
+            const message = phoneType === 'mobile'
+                ? 'Contact number is not a valid mobile number - it must be 10 digits starting with 9, like +63 917 123 4567'
+                : 'Contact number is not a valid telephone number - include the area code, like (02) 8123 4567 or (032) 234 5678';
+            status.innerHTML = `<i class="fas fa-exclamation-circle"></i> <span id="status-text">${message}</span>`;
             status.className = 'status error';
             backContactInput.focus();
             downloadBtn.disabled = false;
@@ -770,7 +904,7 @@ downloadBtn.addEventListener('click', async () => {
             addressLine1: backAddress1Input.value.trim() || '',
             addressLine2: backAddress2Input.value.trim() || '',
             relationship: backRelationshipInput.value.trim() || 'RELATIONSHIP',
-            contact: backContactInput.value.trim() || 'PHONE NUMBER',
+            contact: getContactNumber() || 'PHONE NUMBER',
             surname: frontLastName,
             firstName: frontFirstName,
             isFront: false,
@@ -1104,6 +1238,12 @@ async function loadRecords() {
                 <td class="emergency-cell">${r.relationship ? `<span class="badge badge-relationship">${escapeHtml(r.relationship)}</span>` : dash}</td>
                 <td class="emergency-cell">${cell(r.contact)}</td>
                 <td class="emergency-cell cell-address">${address || dash}</td>
+                <td class="cell-actions">
+                    <button class="view-btn" data-control="${escapeHtml(r.controlNumber)}" data-name="${escapeHtml(r.fullName || r.emergencyName)}"
+                        ${r.controlNumber ? '' : 'disabled title="No control number"'}>
+                        <i class="fas fa-eye"></i> View
+                    </button>
+                </td>
             `;
             recordsTableBody.appendChild(tr);
         });
@@ -1115,6 +1255,84 @@ async function loadRecords() {
         updateSortIndicators();
     }
 }
+
+// ---------- ID preview (Records > View) ----------
+
+const previewModal = document.getElementById('previewModal');
+const previewTitle = document.getElementById('previewTitle');
+const previewControl = document.getElementById('previewControl');
+const previewFront = document.getElementById('previewFront');
+const previewBack = document.getElementById('previewBack');
+const previewFolderBtn = document.getElementById('previewFolderBtn');
+let previewControlNumber = '';
+
+function setPreviewFrame(frame, state, side) {
+    if (state === 'loading') {
+        frame.innerHTML = '<div class="preview-placeholder"><i class="fas fa-spinner fa-spin"></i><span>Loading...</span></div>';
+    } else if (state && state.svgData) {
+        // <img> renders the SVG without running anything inside it
+        frame.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = state.svgData;
+        img.alt = `${side} ID`;
+        img.title = state.path;
+        frame.appendChild(img);
+    } else {
+        frame.innerHTML = `<div class="preview-placeholder"><i class="fas fa-file-excel"></i><span>${side} ID not generated yet, or its file was moved</span></div>`;
+    }
+}
+
+async function openCardPreview(controlNumber, name) {
+    previewControlNumber = controlNumber;
+    previewTitle.textContent = name || 'ID Preview';
+    previewControl.textContent = controlNumber;
+    setPreviewFrame(previewFront, 'loading', 'Front');
+    setPreviewFrame(previewBack, 'loading', 'Back');
+    previewModal.style.display = 'flex';
+    document.getElementById('previewCloseBtn').focus();
+
+    try {
+        const result = await ipcRenderer.invoke('get-card-preview', controlNumber);
+        if (previewControlNumber !== controlNumber) return; // another record was opened meanwhile
+        if (!result.success) throw new Error(result.error);
+        setPreviewFrame(previewFront, result.front, 'Front');
+        setPreviewFrame(previewBack, result.back, 'Back');
+        previewFolderBtn.disabled = !result.front && !result.back;
+    } catch (err) {
+        const message = `<div class="preview-placeholder error"><i class="fas fa-exclamation-circle"></i><span>${escapeHtml(err.message || err)}</span></div>`;
+        previewFront.innerHTML = message;
+        previewBack.innerHTML = '';
+        previewFolderBtn.disabled = true;
+    }
+}
+
+function closeCardPreview() {
+    previewModal.style.display = 'none';
+    previewControlNumber = '';
+    previewFront.innerHTML = '';
+    previewBack.innerHTML = '';
+}
+
+document.querySelector('#records-table tbody').addEventListener('click', e => {
+    const btn = e.target.closest('.view-btn');
+    if (btn && !btn.disabled) openCardPreview(btn.dataset.control, btn.dataset.name);
+});
+
+document.getElementById('previewCloseBtn').addEventListener('click', closeCardPreview);
+previewModal.addEventListener('click', e => {
+    if (e.target === previewModal) closeCardPreview();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && previewModal.style.display !== 'none') closeCardPreview();
+});
+
+previewFolderBtn.addEventListener('click', async () => {
+    const result = await ipcRenderer.invoke('open-card-folder', previewControlNumber);
+    if (!result.success) {
+        status.innerHTML = `<i class="fas fa-exclamation-circle"></i> <span id="status-text">${escapeHtml(result.error)}</span>`;
+        status.className = 'status error';
+    }
+});
 
 function showRecordsEmpty(title, text) {
     document.getElementById('records-table').hidden = true;
