@@ -139,7 +139,9 @@ fn reset_database(state: State<AppState>) -> Value {
 // Authorized representative's signature printed on the back ID (kept in the project root so it can be swapped)
 fn load_authorized_signature(state: &AppState) -> Result<String, String> {
     let path = &state.paths.authorized_signature;
-    let image = fs::read(path).map_err(|_| format!("Authorized signature not found: {}", path.display()))?;
+    let image = fs::read(path).map_err(|_| {
+        format!("Authorized signature not found - copy VP-SIGNATURE.png to {}", path.display())
+    })?;
     Ok(format!("data:image/png;base64,{}", BASE64.encode(image)))
 }
 
@@ -413,8 +415,10 @@ fn open_card_folder(state: State<AppState>, control_number: String) -> Value {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let paths = Paths::new(paths::base_dir());
+            let (resources, work) = paths::locate(app.path().document_dir().ok());
+            let paths = Paths::new(resources, work);
             fs::create_dir_all(&paths.data_dir)?;
+            fs::create_dir_all(&paths.id_output)?;
             let db = Db::open(&paths.database)?;
             app.manage(AppState { db, paths });
             Ok(())
@@ -462,7 +466,7 @@ mod tests {
         let cases: Vec<Value> =
             serde_json::from_str(&fs::read_to_string(std::env::var("OSSI_PARITY_CASES").expect("OSSI_PARITY_CASES")).unwrap())
                 .unwrap();
-        let paths = Paths::new(base.clone());
+        let paths = Paths::new(base.clone(), base.clone());
         fs::create_dir_all(&paths.data_dir).unwrap();
         let state = AppState { db: Db::open(&paths.database).unwrap(), paths };
         let mut results: Vec<Value> = cases

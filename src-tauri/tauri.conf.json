@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ID Card Generator",
+  "productName": "OSSI ID Card Generator",
   "version": "1.0.0",
   "identifier": "ph.ossi.idcardgenerator",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "ID Card Generator",
+        "title": "OSSI ID Card Generator",
         "url": "src/index.html",
         "width": 1400,
         "height": 900,
@@ -23,7 +23,24 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico", "icons/icon.png"]
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "publisher": "Oriental Sentinel Services Inc.",
+    "shortDescription": "OSSI employee ID card generator",
+    "resources": {
+      "../templates/front-id.svg": "templates/front-id.svg",
+      "../templates/back-id.svg": "templates/back-id.svg"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

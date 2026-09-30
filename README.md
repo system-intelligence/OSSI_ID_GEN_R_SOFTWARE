@@ -7,7 +7,7 @@ Rust port of the original Electron app: same screens and features, with a Rust b
 
 | Path | Contents |
 |---|---|
-| `ui/` | The app screens (HTML/CSS/JS), unchanged from the Electron version |
+| `ui/` | The app screens (HTML/CSS/JS); `ui/vendor/` holds Font Awesome so icons work offline |
 | `src-tauri/` | Rust back end: database, PIN lock, control numbers, card generation |
 | `templates/` | `front-id.svg` and `back-id.svg` card designs |
 | `VP-SIGNATURE.png` | Authorized representative's signature for the back ID (**not in git** - add it locally) |
@@ -37,3 +37,27 @@ or set `OSSI_BASE_DIR` to the Electron project folder.
 cd src-tauri
 cargo test
 ```
+
+## Build the Windows installer
+
+One-time setup: `cargo install tauri-cli --version "^2" --locked`
+
+```sh
+cd src-tauri
+cargo tauri build
+```
+
+The installer is written to `src-tauri/target/release/bundle/nsis/ID Card Generator_1.0.0_x64-setup.exe`.
+Copy that one file to the other PC and run it. It installs for the current Windows user (no administrator rights needed)
+and adds a Start menu shortcut. The card templates are included in the installer.
+
+On an installed PC the app keeps its working files in **`Documents\OSSI ID Generator\`**:
+
+| Path | Contents |
+|---|---|
+| `VP-SIGNATURE.png` | **Copy it here by hand** before generating back IDs (it is never bundled) |
+| `data\` | `id-generator.db` and `pin-config.json` - the PIN is set on first start |
+| `ID\` | Generated cards for CorelDRAW |
+
+These files survive updates and uninstalling. To move existing records to that PC, copy the `data\` folder
+(and `ID\` for the saved cards) into `Documents\OSSI ID Generator\` before starting the app.
