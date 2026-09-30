@@ -15,6 +15,11 @@ const ipcRenderer = {
             case 'generate-svg': return invoke('generate_svg', { data: args[0] });
             case 'get-card-preview': return invoke('get_card_preview', { controlNumber: args[0] });
             case 'open-card-folder': return invoke('open_card_folder', { controlNumber: args[0] });
+            case 'get-printer-status': return invoke('get_printer_status');
+            case 'log-print': return invoke('log_print', { controlNumber: args[0], side: args[1], reason: args[2] ?? null, printer: args[3] ?? null });
+            case 'get-print-history': return invoke('get_print_history', { controlNumber: args[0] });
+            case 'get-print-summary': return invoke('get_print_summary');
+            case 'get-print-log': return invoke('get_print_log');
             default: return Promise.reject(new Error(`Unknown channel: ${channel}`));
         }
     }
@@ -67,6 +72,8 @@ let activeTab = 'front';
 let generatedControlNumber = '';
 // Control number issued by the last front download; the back ID is filed under it
 let issuedControlNumber = '';
+// SVG (data URL) of the card last downloaded from each tab, cleared as soon as that tab is edited again
+const lastGenerated = { front: null, back: null };
 let recordsSearchText = '';
 let recordsSortColumn = 'createdAt';
 let recordsSortDirection = 'desc';
@@ -151,6 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     pinBoxes.forEach((box, index) => {
         box.addEventListener('input', function(e) {
+            box.value = box.value.replace(/\D/g, ''); // PIN is digits only
             if (box.value.length === 1 && index < pinBoxes.length - 1) {
                 pinBoxes[index + 1].focus();
             }
@@ -345,6 +353,76 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Searchable dropdowns (City of Birth): type to filter, arrow keys to move, Enter to pick, Esc to close
+    document.querySelectorAll('.select-options.searchable').forEach(panel => {
+        const wrapper = panel.closest('.select-wrapper');
+        const trigger = wrapper.querySelector('.select-trigger');
+        const chevron = wrapper.querySelector('.chevron');
+        const input = panel.querySelector('.select-search-input');
+        const noResults = panel.querySelector('.select-no-results');
+
+        const visibleOptions = () => Array.from(panel.querySelectorAll('.option')).filter(o => !o.hidden);
+
+        function highlight(option) {
+            panel.querySelectorAll('.option.highlighted').forEach(o => o.classList.remove('highlighted'));
+            if (option) {
+                option.classList.add('highlighted');
+                option.scrollIntoView({ block: 'nearest' });
+            }
+        }
+
+        // While searching, the "Select city" placeholder row is hidden and the first match is highlighted
+        function filter() {
+            const query = input.value.trim().toLowerCase();
+            let count = 0;
+            panel.querySelectorAll('.option').forEach(option => {
+                const match = !query || (option.dataset.value !== '' && option.textContent.toLowerCase().includes(query));
+                option.hidden = !match;
+                if (match) count++;
+            });
+            noResults.hidden = count > 0;
+            highlight(query ? visibleOptions()[0] : null);
+        }
+
+        function close() {
+            wrapper.classList.remove('open');
+            chevron.classList.remove('rotate');
+            trigger.focus();
+        }
+
+        // Runs after the trigger's own toggle handler: on opening, start with an empty search
+        trigger.addEventListener('click', () => {
+            if (!wrapper.classList.contains('open')) return;
+            input.value = '';
+            filter();
+            setTimeout(() => input.focus(), 0);
+        });
+
+        input.addEventListener('input', filter);
+        // Clicking in the search box must not reach the document "click outside closes dropdowns" handler
+        input.addEventListener('click', e => e.stopPropagation());
+
+        input.addEventListener('keydown', e => {
+            const options = visibleOptions();
+            const current = options.indexOf(panel.querySelector('.option.highlighted'));
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (!options.length) return;
+                const next = e.key === 'ArrowDown' ? Math.min(current + 1, options.length - 1) : Math.max(current - 1, 0);
+                highlight(options[next]);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const chosen = options[current] || (options.length === 1 ? options[0] : null);
+                if (chosen) chosen.click();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                close();
+            } else if (e.key === 'Tab') {
+                close();
+            }
+        });
+    });
+
     // Close dropdowns when clicking outside
     document.addEventListener('click', function() {
         suffixWrapper.classList.remove('open');
@@ -389,6 +467,8 @@ document.addEventListener('DOMContentLoaded', function() {
             dataUpdated = false;
             generatedControlNumber = '';
             issuedControlNumber = '';
+            lastGenerated.front = null;
+            lastGenerated.back = null;
 
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
@@ -620,7 +700,296 @@ function getHireDate() {
     return `${year}-${month}-${day}`;
 }
 
+// ---------- Printing to the ID card printer (IDP SMART-51 with card flipper: prints both sides in one pass) ----------
+
+const printBtn = document.getElementById('printBtn');
+const printArea = document.getElementById('print-area');
+const printerStatusBtn = document.getElementById('printerStatus');
+
+// ---- Is the SMART-51 driver installed and the printer plugged in? (asked from Windows by Rust) ----
+
+const PRINTER_STATES = {
+    ready: { cls: 'ready', text: p => `${p.printer} ready`, title: p => `Connected: ${p.printer}. Click to check again.` },
+    attention: { cls: 'warn', text: p => `Printer: ${p.detail}`, title: p => `${p.printer} is connected but Windows reports: ${p.detail}. Click to check again.` },
+    disconnected: { cls: 'warn', text: () => 'Printer not connected', title: p => `The driver is installed (${p.printer}), but the printer is unplugged or turned off. Click to check again.` },
+    never_connected: { cls: 'warn', text: () => 'Plug in the printer', title: p => `The driver is installed (${p.driver}), but the printer has not been connected yet. Plug in the USB cable and turn it on - Windows sets it up the first time. Click to check again.` },
+    not_installed: { cls: 'error', text: () => 'Printer driver not installed', title: () => 'No SMART-51 printer found in Windows. Install the IDP SMART-51 Windows driver, then click to check again.' },
+    unknown: { cls: 'unknown', text: () => 'Printer status unknown', title: p => `${p.error || 'Could not check the printer'}. Click to try again.` }
+};
+
+let printerStatus = { state: 'unknown' };
+let printerCheck = null;
+
+function renderPrinterStatus() {
+    const config = PRINTER_STATES[printerStatus.state] || PRINTER_STATES.unknown;
+    printerStatusBtn.className = `printer-status ${config.cls}`;
+    printerStatusBtn.querySelector('.printer-status-text').textContent = config.text(printerStatus);
+    printerStatusBtn.title = config.title(printerStatus);
+}
+
+// One check at a time; callers arriving meanwhile share the running one
+function refreshPrinterStatus() {
+    if (printerCheck) return printerCheck;
+    printerStatusBtn.classList.add('checking');
+    printerCheck = ipcRenderer.invoke('get-printer-status')
+        .then(result => { printerStatus = result || { state: 'unknown' }; })
+        .catch(err => { printerStatus = { state: 'unknown', error: String(err && err.message ? err.message : err) }; })
+        .then(() => {
+            renderPrinterStatus();
+            printerCheck = null;
+            return printerStatus;
+        });
+    return printerCheck;
+}
+
+// Message to show when printing is attempted without a ready printer ('' when it is ready)
+function printerWarning(status) {
+    switch (status.state) {
+        case 'ready': return '';
+        case 'attention': return `The printer reports "${status.detail}". Check it before printing.`;
+        case 'disconnected': return 'The SMART-51 is not connected - plug in the USB cable and turn it on, then choose it in the print dialog.';
+        case 'never_connected': return 'The SMART-51 driver is installed, but the printer has never been plugged in. Connect it by USB and turn it on - Windows finishes the setup the first time.';
+        case 'not_installed': return 'The SMART-51 driver is not installed, so the card cannot go to the ID printer. Install the driver first.';
+        default: return 'Could not check the ID printer. Make sure you choose the SMART-51 in the print dialog.';
+    }
+}
+
+printerStatusBtn.addEventListener('click', refreshPrinterStatus);
+refreshPrinterStatus();
+
+// Re-check when coming back to the app (e.g. after installing the driver or plugging the printer in)
+let lastPrinterFocusCheck = Date.now();
+window.addEventListener('focus', () => {
+    if (Date.now() - lastPrinterFocusCheck < 5000) return;
+    lastPrinterFocusCheck = Date.now();
+    refreshPrinterStatus();
+});
+
+// Prints card sides through the Windows print dialog, one CR80-size page per side (see @media print):
+// [front, back] is one two-page job - with two-sided printing on, the printer puts page 2 on the back of the card.
+// The printer is checked first; the dialog still opens either way, and the returned warning ('' if ready) is shown by the caller.
+async function printCard(pages) {
+    const warning = printerWarning(await refreshPrinterStatus());
+    printArea.innerHTML = '';
+    const images = pages.map(svgData => {
+        const page = document.createElement('div');
+        page.className = 'print-page';
+        const img = new Image();
+        img.src = svgData;
+        img.alt = '';
+        page.appendChild(img);
+        printArea.appendChild(page);
+        return img;
+    });
+    try {
+        await Promise.all(images.map(img => img.decode())); // make sure the cards are drawn before the print snapshot
+    } catch (err) {
+        console.error('Card image could not be prepared for printing:', err);
+    }
+    // Wait until the print dialog is closed (Print and Cancel both end with "afterprint"). window.print()
+    // normally blocks until then; the short fallback covers a WebView that returns early without the event.
+    let printed = false;
+    const dialogClosed = new Promise(resolve => {
+        window.addEventListener('afterprint', () => { printed = true; resolve(); }, { once: true });
+    });
+    window.print();
+    await Promise.race([dialogClosed, new Promise(resolve => setTimeout(resolve, 1000))]);
+    if (!printed) console.warn('No afterprint event after window.print()');
+    return warning;
+}
+
+window.addEventListener('afterprint', () => {
+    printArea.innerHTML = '';
+});
+
+// ---- "Did the card print?" - the only way to know, since the dialog does not report Print vs Cancel ----
+
+const printConfirmModal = document.getElementById('printConfirmModal');
+let resolvePrintConfirm = null;
+
+// what: 'card' (both sides), 'front' or 'back'
+function askDidPrint(what) {
+    document.getElementById('printConfirmTitle').textContent = what === 'card' ? 'Did the card print?' : `Did the ${what} of the card print?`;
+    printConfirmModal.style.display = 'flex';
+    document.getElementById('printConfirmYesBtn').focus();
+    return new Promise(resolve => { resolvePrintConfirm = resolve; });
+}
+
+function closePrintConfirm(printed) {
+    printConfirmModal.style.display = 'none';
+    if (resolvePrintConfirm) resolvePrintConfirm(printed);
+    resolvePrintConfirm = null;
+}
+
+document.getElementById('printConfirmYesBtn').addEventListener('click', () => closePrintConfirm(true));
+document.getElementById('printConfirmNoBtn').addEventListener('click', () => closePrintConfirm(false));
+printConfirmModal.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); closePrintConfirm(false); }
+});
+
+// What the bottom-bar Print button prints: both sides in one job once the front and back of the same card
+// are downloaded, otherwise just this tab's side
+function actionBarPrintJob() {
+    const { front, back } = lastGenerated;
+    if (front && back && front.control && front.control === back.control) {
+        return { controlNumber: front.control, sides: [{ side: 'front', svg: front.svg }, { side: 'back', svg: back.svg }] };
+    }
+    const own = (activeTab === 'front' || activeTab === 'back') && lastGenerated[activeTab];
+    return own ? { controlNumber: own.control, sides: [{ side: activeTab, svg: own.svg }] } : null;
+}
+
+function updatePrintButton() {
+    if (activeTab !== 'front' && activeTab !== 'back') return;
+    const job = actionBarPrintJob();
+    const both = job && job.sides.length === 2;
+    const side = activeTab === 'back' ? 'Back' : 'Front';
+    printBtn.querySelector('span').textContent = both ? 'Print Both Sides' : `Print ${side}`;
+    printBtn.disabled = !job;
+    printBtn.title = both ? 'Print the front and back of the card in one go'
+        : job ? `Print the ${side.toLowerCase()} only - download the other side too to print both at once`
+        : 'Download the card first, then print it';
+}
+
+// Editing a tab after downloading makes its saved card out of date, so it has to be downloaded again before printing
+['front', 'back'].forEach(tab => {
+    const panel = document.getElementById(`${tab}-panel`);
+    const invalidate = e => {
+        // Typing in a dropdown's search box is not an edit to the card
+        if (e && e.target.closest && e.target.closest('.select-search')) return;
+        if (!lastGenerated[tab]) return;
+        lastGenerated[tab] = null;
+        updatePrintButton();
+    };
+    panel.addEventListener('input', invalidate);
+    panel.addEventListener('change', invalidate);
+    panel.addEventListener('click', e => {
+        if (e.target.closest('.option, .seg-btn')) invalidate();
+    });
+});
+
+// ---- Print log: every card side sent to the printer is recorded; reprints ask for a reason first ----
+
+const reprintModal = document.getElementById('reprintModal');
+const reprintConfirmBtn = document.getElementById('reprintConfirmBtn');
+const reprintNote = document.getElementById('reprintNote');
+const reasonButtons = reprintModal.querySelectorAll('.reason-btn');
+let resolveReprint = null;
+let chosenReason = '';
+
+function formatPrintDate(iso) {
+    const date = new Date(iso);
+    return `${date.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+// Resolves with the reason text ("Lost", "Other: left in bus"...) or null when the operator cancels.
+// what: 'card' (both sides), 'front' or 'back'; previous: earlier print_log entries of those sides, newest first
+function askReprintReason(what, previous) {
+    const counts = ['front', 'back']
+        .map(side => [side, previous.filter(e => e.side === side).length])
+        .filter(([, n]) => n > 0)
+        .map(([side, n]) => `${side} ${n === 1 ? 'once' : `${n} times`}`)
+        .join(', ');
+    document.getElementById('reprintTitle').textContent = what === 'card' ? 'Reprint this card?' : `Reprint ${what} of this card?`;
+    document.getElementById('reprintDescription').textContent =
+        `This card was already sent to the printer (${counts}, last on ${formatPrintDate(previous[0].printedAt)}).` +
+        ' Choose a reason for the reprint.';
+    chosenReason = '';
+    reasonButtons.forEach(btn => btn.classList.remove('active'));
+    reprintNote.value = '';
+    reprintConfirmBtn.disabled = true;
+    reprintModal.style.display = 'flex';
+    reasonButtons[0].focus();
+    return new Promise(resolve => { resolveReprint = resolve; });
+}
+
+function closeReprint(result) {
+    reprintModal.style.display = 'none';
+    if (resolveReprint) resolveReprint(result);
+    resolveReprint = null;
+}
+
+reasonButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        chosenReason = btn.dataset.reason;
+        reasonButtons.forEach(b => b.classList.toggle('active', b === btn));
+        reprintConfirmBtn.disabled = false;
+        reprintNote.focus();
+    });
+});
+
+reprintConfirmBtn.addEventListener('click', () => {
+    const note = reprintNote.value.trim();
+    closeReprint(note ? `${chosenReason}: ${note}` : chosenReason);
+});
+document.getElementById('reprintCancelBtn').addEventListener('click', () => closeReprint(null));
+reprintModal.addEventListener('click', e => { if (e.target === reprintModal) closeReprint(null); });
+reprintModal.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); closeReprint(null); }
+    // Enter in the details box confirms; on a reason button Enter just picks that reason
+    if (e.key === 'Enter' && e.target === reprintNote && !reprintConfirmBtn.disabled) reprintConfirmBtn.click();
+});
+
+// Prints one or both sides of a card as one job and logs each side once the operator confirms it printed.
+// sides: [{ side: 'front'|'back', svg }] - front first, so with both sides the back is page 2.
+// Returns { cancelled } when the reprint question was cancelled, { notPrinted } when the operator said it
+// did not print (nothing is logged), otherwise { warning } ('' when the ID printer was ready).
+async function printCardSides(controlNumber, sides) {
+    const what = sides.length === 2 ? 'card' : sides[0].side;
+    let reason = '';
+    if (controlNumber) {
+        try {
+            const result = await ipcRenderer.invoke('get-print-history', controlNumber);
+            const previous = (result.history || []).filter(entry => sides.some(s => s.side === entry.side));
+            if (previous.length) {
+                reason = await askReprintReason(what, previous);
+                if (reason === null) return { cancelled: true };
+            }
+        } catch (err) {
+            console.error('Could not read the print history:', err);
+        }
+    }
+
+    const warning = await printCard(sides.map(s => s.svg));
+    if (!(await askDidPrint(what))) return { notPrinted: true };
+
+    if (controlNumber) {
+        const printer = printerStatus.state === 'ready' ? printerStatus.printer : '';
+        for (const { side } of sides) {
+            try {
+                const logged = await ipcRenderer.invoke('log-print', controlNumber, side, reason, printer);
+                if (!logged.success) console.error('Print was not logged:', logged.error);
+            } catch (err) {
+                console.error('Print was not logged:', err);
+            }
+        }
+        if (activeTab === 'records') loadRecords();
+        if (activeTab === 'printlog') loadPrintLog();
+    }
+    return { warning };
+}
+
+printBtn.addEventListener('click', async () => {
+    const job = actionBarPrintJob();
+    if (!job) return;
+    const { cancelled, notPrinted, warning } = await printCardSides(job.controlNumber, job.sides);
+    if (cancelled) return;
+    if (notPrinted) {
+        status.innerHTML = '<i class="fas fa-info-circle"></i> <span id="status-text">Print cancelled or failed - nothing was recorded in the print log.</span>';
+        status.className = 'status info';
+        return;
+    }
+    if (warning) {
+        status.innerHTML = `<i class="fas fa-exclamation-triangle"></i> <span id="status-text">${escapeHtml(warning)}</span>`;
+        status.className = 'status error';
+        return;
+    }
+    const printed = job.sides.length === 2 ? 'Front and back' : job.sides[0].side === 'back' ? 'Back' : 'Front';
+    status.innerHTML = `<i class="fas fa-check-circle"></i> <span id="status-text">${printed} printed and recorded in the print log.</span>`;
+    status.className = 'status success';
+});
+
 function checkReady() {
+    updatePrintButton();
     if (activeTab === 'back') {
         downloadBtn.disabled = !dataUpdated;
     } else {
@@ -919,6 +1288,9 @@ downloadBtn.addEventListener('click', async () => {
         const result = await ipcRenderer.invoke('generate-svg', data);
         if (result.success) {
             if (result.controlNumber) issuedControlNumber = result.controlNumber;
+            // The back is filed under the control number issued with the front
+            lastGenerated[activeTab] = { svg: result.svgData, control: issuedControlNumber };
+            updatePrintButton();
             status.innerHTML = `<i class="fas fa-check-circle"></i> <span id="status-text">SVG saved to: ${result.savePath}</span>`;
             status.className = 'status success';
         } else {
@@ -952,6 +1324,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
             status.innerHTML = '<i class="fas fa-info-circle"></i> <span id="status-text">Viewing registered employee records</span>';
             if (btnRow) btnRow.style.display = 'none';
             loadRecords();
+        } else if (activeTab === 'printlog') {
+            status.innerHTML = '<i class="fas fa-info-circle"></i> <span id="status-text">Viewing the print log</span>';
+            if (btnRow) btnRow.style.display = 'none';
+            loadPrintLog();
         } else {
             status.innerHTML = '<i class="fas fa-info-circle"></i> <span id="status-text">Fill in the information and upload images</span>';
             if (btnRow) btnRow.style.display = 'flex';
@@ -1104,8 +1480,11 @@ async function loadRecords() {
     if (!recordsTableBody) return;
     
     try {
-        const records = await ipcRenderer.invoke('get-all-records');
-        
+        const [records, printSummary] = await Promise.all([
+            ipcRenderer.invoke('get-all-records'),
+            ipcRenderer.invoke('get-print-summary').catch(() => ({}))
+        ]);
+
         const mergedMap = new Map();
         
         records.forEach(r => {
@@ -1162,6 +1541,15 @@ async function loadRecords() {
         });
         
         let mergedRecords = Array.from(mergedMap.values());
+
+        // Times each side was sent to the printer (print_log), keyed by control number
+        mergedRecords.forEach(r => {
+            const printed = (r.controlNumber && printSummary[r.controlNumber]) || {};
+            r.printFront = printed.front || 0;
+            r.printBack = printed.back || 0;
+            r.printCount = r.printFront + r.printBack;
+            r.lastPrintedAt = printed.lastPrintedAt || '';
+        });
         
         if (recordsSearchText.trim()) {
             const term = recordsSearchText.trim().toLowerCase();
@@ -1186,7 +1574,10 @@ async function loadRecords() {
             let aVal = a[recordsSortColumn];
             let bVal = b[recordsSortColumn];
             
-            if (recordsSortColumn === 'no' || recordsSortColumn === 'isRehire') {
+            if (recordsSortColumn === 'printCount') {
+                aVal = a.printCount;
+                bVal = b.printCount;
+            } else if (recordsSortColumn === 'no' || recordsSortColumn === 'isRehire') {
                 aVal = recordsSortColumn === 'no' ? 0 : (a.isRehire ? 1 : 0);
                 bVal = recordsSortColumn === 'no' ? 0 : (b.isRehire ? 1 : 0);
             } else if (recordsSortColumn === 'createdAt') {
@@ -1234,6 +1625,11 @@ async function loadRecords() {
                 <td>${cell(r.cityOfBirth)}</td>
                 <td>${r.isRehire ? '<span class="badge badge-rehire">Rehire</span>' : '<span class="badge badge-muted">No</span>'}</td>
                 <td class="cell-cards">${r.hasFront ? '<span class="card-chip front">Front</span>' : ''}${r.hasBack ? '<span class="card-chip back">Back</span>' : ''}</td>
+                <td class="cell-printed">${r.printCount
+                    ? `<span class="printed-count${r.printFront > 1 || r.printBack > 1 ? ' reprinted' : ''}" title="Front ${r.printFront}× · Back ${r.printBack}×">`
+                        + `<i class="fas fa-print"></i> F${r.printFront} · B${r.printBack}</span>`
+                        + `<span class="cell-sub">${escapeHtml(new Date(r.lastPrintedAt).toLocaleDateString([], { day: 'numeric', month: 'short' }))}</span>`
+                    : '<span class="cell-empty">Not printed</span>'}</td>
                 <td class="emergency-cell cell-name">${cell(r.emergencyName)}</td>
                 <td class="emergency-cell">${r.relationship ? `<span class="badge badge-relationship">${escapeHtml(r.relationship)}</span>` : dash}</td>
                 <td class="emergency-cell">${cell(r.contact)}</td>
@@ -1264,7 +1660,19 @@ const previewControl = document.getElementById('previewControl');
 const previewFront = document.getElementById('previewFront');
 const previewBack = document.getElementById('previewBack');
 const previewFolderBtn = document.getElementById('previewFolderBtn');
+const printFrontBtn = document.getElementById('printFrontBtn');
+const printBackBtn = document.getElementById('printBackBtn');
+const printBothBtn = document.getElementById('printBothBtn');
 let previewControlNumber = '';
+let previewCards = { front: null, back: null };
+
+function resetPreviewPrinting(cards) {
+    previewCards = cards;
+    printFrontBtn.disabled = !cards.front;
+    printBackBtn.disabled = !cards.back;
+    printBothBtn.disabled = !(cards.front && cards.back);
+    showPrintWarning('');
+}
 
 function setPreviewFrame(frame, state, side) {
     if (state === 'loading') {
@@ -1288,6 +1696,7 @@ async function openCardPreview(controlNumber, name) {
     previewControl.textContent = controlNumber;
     setPreviewFrame(previewFront, 'loading', 'Front');
     setPreviewFrame(previewBack, 'loading', 'Back');
+    resetPreviewPrinting({ front: null, back: null });
     previewModal.style.display = 'flex';
     document.getElementById('previewCloseBtn').focus();
 
@@ -1298,6 +1707,8 @@ async function openCardPreview(controlNumber, name) {
         setPreviewFrame(previewFront, result.front, 'Front');
         setPreviewFrame(previewBack, result.back, 'Back');
         previewFolderBtn.disabled = !result.front && !result.back;
+        resetPreviewPrinting({ front: result.front && result.front.svgData, back: result.back && result.back.svgData });
+        loadPrintHistory(controlNumber);
     } catch (err) {
         const message = `<div class="preview-placeholder error"><i class="fas fa-exclamation-circle"></i><span>${escapeHtml(err.message || err)}</span></div>`;
         previewFront.innerHTML = message;
@@ -1306,8 +1717,60 @@ async function openCardPreview(controlNumber, name) {
     }
 }
 
+function showPrintWarning(warning) {
+    document.getElementById('printWarningText').textContent = warning;
+    document.getElementById('printWarning').hidden = !warning;
+}
+
+// Print history of the card shown in the preview, newest first
+async function loadPrintHistory(controlNumber) {
+    const list = document.getElementById('printHistoryList');
+    list.innerHTML = '';
+    try {
+        const result = await ipcRenderer.invoke('get-print-history', controlNumber);
+        if (previewControlNumber !== controlNumber) return;
+        const history = result.history || [];
+        if (!history.length) {
+            list.innerHTML = '<li class="print-history-empty">Not printed yet</li>';
+            return;
+        }
+        list.innerHTML = history.map(entry => `
+            <li>
+                <span class="card-chip ${entry.side === 'back' ? 'back' : 'front'}">${entry.side === 'back' ? 'Back' : 'Front'}</span>
+                <span class="print-history-date">${escapeHtml(formatPrintDate(entry.printedAt))}</span>
+                ${entry.isReprint
+                    ? `<span class="badge badge-rehire">Reprint</span>${entry.reason ? `<span class="print-history-reason">${escapeHtml(entry.reason)}</span>` : ''}`
+                    : '<span class="badge badge-muted">First print</span>'}
+                ${entry.printer ? `<span class="print-history-printer"><i class="fas fa-print"></i> ${escapeHtml(entry.printer)}</span>` : ''}
+            </li>`).join('');
+    } catch (err) {
+        list.innerHTML = `<li class="print-history-empty">Could not load print history: ${escapeHtml(err.message || err)}</li>`;
+    }
+}
+
+// Prints from the preview: both sides in one job (the printer flips the card), or a single side
+async function printFromPreview(sides) {
+    const { cancelled, notPrinted, warning } = await printCardSides(previewControlNumber, sides);
+    if (cancelled) return;
+    showPrintWarning(notPrinted ? 'Print cancelled or failed - nothing was recorded in the print log.' : warning);
+    if (!notPrinted) loadPrintHistory(previewControlNumber);
+}
+
+printBothBtn.addEventListener('click', () => {
+    if (previewCards.front && previewCards.back) {
+        printFromPreview([{ side: 'front', svg: previewCards.front }, { side: 'back', svg: previewCards.back }]);
+    }
+});
+printFrontBtn.addEventListener('click', () => {
+    if (previewCards.front) printFromPreview([{ side: 'front', svg: previewCards.front }]);
+});
+printBackBtn.addEventListener('click', () => {
+    if (previewCards.back) printFromPreview([{ side: 'back', svg: previewCards.back }]);
+});
+
 function closeCardPreview() {
     previewModal.style.display = 'none';
+    resetPreviewPrinting({ front: null, back: null });
     previewControlNumber = '';
     previewFront.innerHTML = '';
     previewBack.innerHTML = '';
@@ -1323,7 +1786,9 @@ previewModal.addEventListener('click', e => {
     if (e.target === previewModal) closeCardPreview();
 });
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && previewModal.style.display !== 'none') closeCardPreview();
+    // Esc in the reprint question closes only that question, not the preview behind it
+    if (e.key === 'Escape' && previewModal.style.display !== 'none' &&
+        reprintModal.style.display === 'none' && printConfirmModal.style.display === 'none') closeCardPreview();
 });
 
 previewFolderBtn.addEventListener('click', async () => {
@@ -1332,6 +1797,113 @@ previewFolderBtn.addEventListener('click', async () => {
         status.innerHTML = `<i class="fas fa-exclamation-circle"></i> <span id="status-text">${escapeHtml(result.error)}</span>`;
         status.className = 'status error';
     }
+});
+
+// ---------- Print Log tab: every card side sent to the printer ----------
+
+const logTableBody = document.querySelector('#log-table tbody');
+const logSearchInput = document.getElementById('log-search');
+const logReprintsOnly = document.getElementById('logReprintsOnly');
+const logRangeButtons = document.querySelectorAll('.log-range [data-range]');
+let printLogEntries = [];
+let logRange = 'month';
+
+function inLogRange(entry) {
+    const printed = new Date(entry.printedAt);
+    const now = new Date();
+    switch (logRange) {
+        case 'today': return printed.toDateString() === now.toDateString();
+        case 'week': return now - printed <= 7 * 24 * 60 * 60 * 1000;
+        case 'month': return printed.getFullYear() === now.getFullYear() && printed.getMonth() === now.getMonth();
+        default: return true;
+    }
+}
+
+// Tiles count the whole period; the search box and "Only reprints" only narrow the table
+function renderPrintLogStats(entries) {
+    const reprints = entries.filter(e => e.isReprint);
+    document.getElementById('logStatReprints').textContent = reprints.length;
+    document.getElementById('logStatCards').textContent = new Set(entries.map(e => e.controlNumber)).size;
+
+    // Most common reasons, e.g. "Lost 3 · Damaged 1" ("Lost: left in jeepney" counts as Lost)
+    const reasons = {};
+    reprints.forEach(e => {
+        const reason = (e.reason || 'No reason').split(':')[0].trim();
+        reasons[reason] = (reasons[reason] || 0) + 1;
+    });
+    const top = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} ${n}`).join(' · ');
+    document.getElementById('logStatReasons').textContent = top || 'none in this period';
+}
+
+function renderPrintLog() {
+    const inPeriod = printLogEntries.filter(inLogRange);
+    renderPrintLogStats(inPeriod);
+
+    const term = logSearchInput.value.trim().toLowerCase();
+    const rows = inPeriod.filter(e =>
+        (!logReprintsOnly.checked || e.isReprint) &&
+        (!term || [e.name, e.controlNumber, e.reason, e.printer].some(v => String(v || '').toLowerCase().includes(term)))
+    );
+
+    const table = document.getElementById('log-table');
+    const empty = document.getElementById('log-empty');
+    if (!rows.length) {
+        table.hidden = true;
+        empty.hidden = false;
+        document.getElementById('log-empty-title').textContent = printLogEntries.length ? 'No prints match' : 'Nothing printed yet';
+        document.getElementById('log-empty-text').textContent = printLogEntries.length
+            ? 'Try another period, turn off "Only reprints", or clear the search.'
+            : 'Cards appear here when they are sent to the printer.';
+        logTableBody.innerHTML = '';
+        return;
+    }
+    table.hidden = false;
+    empty.hidden = true;
+
+    const dash = '<span class="cell-empty">—</span>';
+    logTableBody.innerHTML = rows.map(e => {
+        const printed = new Date(e.printedAt);
+        return `<tr class="${e.isReprint ? 'log-reprint' : ''}">
+            <td>${escapeHtml(printed.toLocaleDateString())}<span class="cell-sub">${escapeHtml(printed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span></td>
+            <td class="cell-name">${e.name ? escapeHtml(e.name) : dash}</td>
+            <td><span class="control-chip">${escapeHtml(e.controlNumber)}</span></td>
+            <td><span class="card-chip ${e.side === 'back' ? 'back' : 'front'}">${e.side === 'back' ? 'Back' : 'Front'}</span></td>
+            <td>${e.isReprint ? '<span class="badge badge-rehire">Reprint</span>' : '<span class="badge badge-muted">First print</span>'}</td>
+            <td class="log-reason">${e.reason ? escapeHtml(e.reason) : dash}</td>
+            <td>${e.printer ? escapeHtml(e.printer) : dash}</td>
+            <td class="cell-actions"><button class="view-btn" data-control="${escapeHtml(e.controlNumber)}" data-name="${escapeHtml(e.name)}"><i class="fas fa-eye"></i> View</button></td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadPrintLog() {
+    try {
+        const result = await ipcRenderer.invoke('get-print-log');
+        if (!result.success) throw new Error(result.error);
+        printLogEntries = result.entries || [];
+    } catch (err) {
+        console.error('Failed to load the print log:', err);
+        printLogEntries = [];
+    }
+    renderPrintLog();
+}
+
+logRangeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        logRange = btn.dataset.range;
+        logRangeButtons.forEach(b => {
+            b.classList.toggle('active', b === btn);
+            b.setAttribute('aria-checked', String(b === btn));
+        });
+        renderPrintLog();
+    });
+});
+logReprintsOnly.addEventListener('change', renderPrintLog);
+logSearchInput.addEventListener('input', renderPrintLog);
+
+logTableBody.addEventListener('click', e => {
+    const btn = e.target.closest('.view-btn');
+    if (btn) openCardPreview(btn.dataset.control, btn.dataset.name);
 });
 
 function showRecordsEmpty(title, text) {

@@ -62,10 +62,19 @@ pub fn pad_to_box(img: &DynamicImage, box_w: f64, box_h: f64) -> DynamicImage {
     DynamicImage::ImageRgba8(canvas)
 }
 
-// ID photo for a slice box, as a JPEG data URL; unreadable input is passed through unchanged
+// True when some pixel is not fully opaque (e.g. a photo with its background removed)
+fn has_transparency(img: &DynamicImage) -> bool {
+    img.color().has_alpha() && img.to_rgba8().pixels().any(|p| p.0[3] < 255)
+}
+
+// ID photo for a slice box: JPEG for ordinary photos (small files), PNG when the photo has transparent
+// parts - JPEG cannot store transparency and would turn those parts black. Unreadable input is passed through.
 pub fn photo_for_box(data_url: &str, box_w: f64, box_h: f64) -> String {
     decode(data_url)
-        .and_then(|img| to_data_url(&crop_to_box(&img, box_w, box_h), true))
+        .and_then(|img| {
+            let cropped = crop_to_box(&img, box_w, box_h);
+            to_data_url(&cropped, !has_transparency(&cropped))
+        })
         .unwrap_or_else(|| data_url.to_string())
 }
 
@@ -106,6 +115,31 @@ mod tests {
         let out = pad_to_box(&DynamicImage::new_rgba8(600, 300), 1125.0, 250.0);
         assert!((ratio(&out) - 1125.0 / 250.0).abs() < 0.02);
         assert_eq!(out.height(), 250);
+    }
+
+    fn png_data_url(img: &DynamicImage) -> String {
+        to_data_url(img, false).unwrap()
+    }
+
+    #[test]
+    fn transparent_photo_keeps_its_transparency() {
+        // Background-removed photo: transparent everywhere except an opaque square in the middle
+        let mut rgba = RgbaImage::new(400, 400);
+        for (x, y, pixel) in rgba.enumerate_pixels_mut() {
+            if (150..250).contains(&x) && (150..250).contains(&y) {
+                *pixel = image::Rgba([40, 40, 40, 255]);
+            }
+        }
+        let out = photo_for_box(&png_data_url(&DynamicImage::ImageRgba8(rgba)), 972.0, 982.0);
+        assert!(out.starts_with("data:image/png;base64,"), "transparent photo must stay PNG");
+        let decoded = decode(&out).unwrap().to_rgba8();
+        assert_eq!(decoded.get_pixel(0, 0).0[3], 0, "corner must still be transparent, not black");
+    }
+
+    #[test]
+    fn opaque_photo_becomes_jpeg() {
+        let opaque = DynamicImage::ImageRgba8(RgbaImage::from_pixel(400, 400, image::Rgba([200, 180, 160, 255])));
+        assert!(photo_for_box(&png_data_url(&opaque), 972.0, 982.0).starts_with("data:image/jpeg;base64,"));
     }
 
     #[test]

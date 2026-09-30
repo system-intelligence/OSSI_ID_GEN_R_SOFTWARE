@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2.125in" height="3.37in" viewBox="0 0 2125 3370">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2.125in" height="3.375in" viewBox="0 0 2125 3375">
   <!-- Card background -->
-  <rect x="0" y="0" width="2125" height="3370" fill="#ffffff" stroke="#9e9c9c" stroke-width="0.1"/>
+  <rect x="0" y="0" width="2125" height="3375" fill="#ffffff" stroke="#9e9c9c" stroke-width="0.1"/>
   
   <!-- OSSI seal (OSSI_LOGO_v2 1.png, resized to 700px) -->
   <image id="logo-img" x="90.4" y="98.8" width="522.5" height="522.5" preserveAspectRatio="xMidYMid meet"

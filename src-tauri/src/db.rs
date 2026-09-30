@@ -132,6 +132,22 @@ impl Db {
         )?;
         add_column(&conn, "ALTER TABLE id_records ADD COLUMN relationship TEXT");
         add_column(&conn, "ALTER TABLE id_records ADD COLUMN file_path TEXT");
+
+        // Every time a card side is sent to the printer. "Sent", not "printed": the app cannot see whether
+        // the operator cancelled the print dialog or the printer jammed.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS print_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                control_number TEXT NOT NULL,
+                side TEXT NOT NULL,
+                is_reprint INTEGER NOT NULL DEFAULT 0,
+                reason TEXT,
+                printer TEXT,
+                printed_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_print_log_control ON print_log(control_number)", [])?;
         Ok(())
     }
 
@@ -250,10 +266,179 @@ impl Db {
         rows.collect()
     }
 
+    // Records one card side sent to the printer; it is a reprint when that side was sent before
+    pub fn log_print(&self, control_number: &str, side: &str, reason: &str, printer: &str) -> rusqlite::Result<Value> {
+        let conn = self.conn();
+        let previous: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM print_log WHERE control_number = ? AND side = ?",
+            params![control_number, side],
+            |row| row.get(0),
+        )?;
+        let printed_at = now_iso();
+        conn.execute(
+            "INSERT INTO print_log (control_number, side, is_reprint, reason, printer, printed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            params![control_number, side, (previous > 0) as i32, or_null(reason), or_null(printer), printed_at],
+        )?;
+        Ok(json!({ "isReprint": previous > 0, "printedAt": printed_at, "count": previous + 1 }))
+    }
+
+    // Print history of one card, newest first
+    pub fn print_history(&self, control_number: &str) -> rusqlite::Result<Vec<Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT side, is_reprint, reason, printer, printed_at FROM print_log
+             WHERE control_number = ? ORDER BY printed_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([control_number], |row| {
+            Ok(json!({
+                "side": row.get::<_, String>(0)?,
+                "isReprint": row.get::<_, i64>(1)? != 0,
+                "reason": row.get::<_, Option<String>>(2)?,
+                "printer": row.get::<_, Option<String>>(3)?,
+                "printedAt": row.get::<_, String>(4)?,
+            }))
+        })?;
+        rows.collect()
+    }
+
+    // The whole print log, newest first, with the employee's name from the card's latest front record
+    pub fn print_log_entries(&self) -> rusqlite::Result<Vec<Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT p.control_number, p.side, p.is_reprint, p.reason, p.printer, p.printed_at,
+                    r.first_name, r.middle_initial, r.last_name, r.suffix
+             FROM print_log p
+             LEFT JOIN id_records r ON r.id = (
+                 SELECT id FROM id_records
+                 WHERE control_number = p.control_number AND type = 'front'
+                 ORDER BY created_at DESC, id DESC LIMIT 1
+             )
+             ORDER BY p.printed_at DESC, p.id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let name = (6..=9)
+                .filter_map(|i| row.get::<_, Option<String>>(i).ok().flatten())
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            Ok(json!({
+                "controlNumber": row.get::<_, String>(0)?,
+                "side": row.get::<_, String>(1)?,
+                "isReprint": row.get::<_, i64>(2)? != 0,
+                "reason": row.get::<_, Option<String>>(3)?,
+                "printer": row.get::<_, Option<String>>(4)?,
+                "printedAt": row.get::<_, String>(5)?,
+                "name": name,
+            }))
+        })?;
+        rows.collect()
+    }
+
+    // Per control number: how many times each side was sent to the printer and when last, for the Records table
+    pub fn print_summary(&self) -> rusqlite::Result<Map<String, Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT control_number,
+                    SUM(side = 'front'), SUM(side = 'back'), MAX(printed_at)
+             FROM print_log GROUP BY control_number",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                json!({
+                    "front": row.get::<_, i64>(1)?,
+                    "back": row.get::<_, i64>(2)?,
+                    "lastPrintedAt": row.get::<_, String>(3)?,
+                }),
+            ))
+        })?;
+        rows.collect()
+    }
+
     pub fn reset_database(&self) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute("DELETE FROM id_records", [])?;
         conn.execute("DELETE FROM control_numbers", [])?;
+        conn.execute("DELETE FROM print_log", [])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_db() -> Db {
+        Db::open(Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn first_print_is_not_a_reprint_but_the_second_is() {
+        let db = memory_db();
+        let first = db.log_print("270223CAB-9671-RH", "front", "", "SMART-51").unwrap();
+        assert_eq!(first["isReprint"], false);
+        assert_eq!(first["count"], 1);
+
+        // The back is a different side, so its first print is not a reprint either
+        assert_eq!(db.log_print("270223CAB-9671-RH", "back", "", "SMART-51").unwrap()["isReprint"], false);
+
+        let again = db.log_print("270223CAB-9671-RH", "front", "Lost", "SMART-51").unwrap();
+        assert_eq!(again["isReprint"], true);
+        assert_eq!(again["count"], 2);
+    }
+
+    #[test]
+    fn history_and_summary() {
+        let db = memory_db();
+        db.log_print("260627ANG-0950", "front", "", "").unwrap();
+        db.log_print("260627ANG-0950", "front", "Damaged", "SMART-51").unwrap();
+        db.log_print("260627ANG-0950", "back", "", "").unwrap();
+        db.log_print("251231QC-0001", "front", "", "").unwrap();
+
+        let history = db.print_history("260627ANG-0950").unwrap();
+        assert_eq!(history.len(), 3);
+        let reprint = history.iter().find(|h| h["isReprint"] == true).unwrap();
+        assert_eq!(reprint["reason"], "Damaged");
+        assert_eq!(reprint["printer"], "SMART-51");
+        assert!(history.iter().filter(|h| h["isReprint"] == false).all(|h| h["reason"].is_null()));
+
+        let summary = db.print_summary().unwrap();
+        assert_eq!(summary["260627ANG-0950"]["front"], 2);
+        assert_eq!(summary["260627ANG-0950"]["back"], 1);
+        assert_eq!(summary["251231QC-0001"]["front"], 1);
+        assert_eq!(summary["251231QC-0001"]["back"], 0);
+    }
+
+    #[test]
+    fn full_log_includes_employee_names() {
+        let db = memory_db();
+        let record = IdRecord {
+            first_name: "JIRRUM",
+            middle_initial: "D.",
+            last_name: "EDICA",
+            control_number: "270223CAB-9671-RH",
+            ..Default::default()
+        };
+        db.save_id_record("front", &record).unwrap();
+        db.log_print("270223CAB-9671-RH", "front", "", "SMART-51").unwrap();
+        db.log_print("270223CAB-9671-RH", "front", "Lost", "SMART-51").unwrap();
+        db.log_print("999999XXX-0000", "back", "", "").unwrap(); // no record for this number
+
+        let log = db.print_log_entries().unwrap();
+        assert_eq!(log.len(), 3);
+        let named: Vec<_> = log.iter().filter(|e| e["controlNumber"] == "270223CAB-9671-RH").collect();
+        assert!(named.iter().all(|e| e["name"] == "JIRRUM D. EDICA"));
+        assert!(named.iter().any(|e| e["isReprint"] == true && e["reason"] == "Lost"));
+        assert_eq!(log.iter().find(|e| e["controlNumber"] == "999999XXX-0000").unwrap()["name"], "");
+    }
+
+    #[test]
+    fn reset_clears_the_print_log() {
+        let db = memory_db();
+        db.log_print("260627ANG-0950", "front", "", "").unwrap();
+        db.reset_database().unwrap();
+        assert!(db.print_summary().unwrap().is_empty());
+        assert_eq!(db.log_print("260627ANG-0950", "front", "", "").unwrap()["isReprint"], false);
     }
 }

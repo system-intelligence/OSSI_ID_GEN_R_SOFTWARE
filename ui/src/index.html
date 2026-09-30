@@ -14,37 +14,51 @@
 <body>
     <div id="lockScreen" class="lock-screen">
         <div class="lock-card">
-            <div class="lock-icon">
-                <i class="fas fa-lock"></i>
+            <div class="lock-brand">
+                <img src="../icons/ossi-seal.png" alt="Oriental Sentinel Services Inc. seal" class="lock-seal">
+                <div class="lock-company">Oriental Sentinel<br>Services Inc.</div>
+                <div class="lock-motto">Integrity <span>&bull;</span> Honesty <span>&bull;</span> Discipline</div>
             </div>
-            <div class="lock-title">ID Card Generator</div>
-            <div class="lock-subtitle" id="lockSubtitle">Enter PIN to continue</div>
-            <div class="pin-inputs" id="pinInputs">
-                <input type="password" maxlength="1" class="pin-box" data-index="0">
-                <input type="password" maxlength="1" class="pin-box" data-index="1">
-                <input type="password" maxlength="1" class="pin-box" data-index="2">
-                <input type="password" maxlength="1" class="pin-box" data-index="3">
+
+            <div class="lock-form">
+                <div class="lock-badge"><i class="fas fa-lock"></i></div>
+                <div class="lock-title">ID Card Generator</div>
+                <div class="lock-subtitle" id="lockSubtitle">Enter PIN to continue</div>
+                <div class="pin-inputs" id="pinInputs">
+                    <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="0" inputmode="numeric" autocomplete="off" aria-label="PIN digit 1">
+                    <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="1" inputmode="numeric" autocomplete="off" aria-label="PIN digit 2">
+                    <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="2" inputmode="numeric" autocomplete="off" aria-label="PIN digit 3">
+                    <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="3" inputmode="numeric" autocomplete="off" aria-label="PIN digit 4">
+                </div>
+                <button id="unlockBtn" class="unlock-btn">
+                    <i class="fas fa-unlock-alt"></i> <span id="unlockBtnText">Unlock</span>
+                </button>
+                <div id="lockError" class="lock-error" role="alert"></div>
+                <div class="lock-footer"><i class="fas fa-shield-alt"></i> Authorized personnel only</div>
             </div>
-            <button id="unlockBtn" class="unlock-btn">
-                <i class="fas fa-unlock-alt"></i> <span id="unlockBtnText">Unlock</span>
-            </button>
-            <div id="lockError" class="lock-error"></div>
         </div>
     </div>
 
     <div class="container">
         <header class="app-header">
-            <div class="app-logo"><i class="fas fa-id-badge"></i></div>
+            <img src="../icons/ossi-seal.png" alt="OSSI seal" class="app-logo">
             <div>
                 <h1 class="app-title">ID Card Generator</h1>
                 <p class="app-subtitle">Oriental Sentinel Services Inc.</p>
             </div>
+            <button type="button" class="printer-status checking" id="printerStatus" title="Checking the ID card printer...">
+                <span class="printer-dot"></span>
+                <i class="fas fa-print"></i>
+                <span class="printer-status-text">Checking printer...</span>
+                <i class="fas fa-sync-alt printer-refresh"></i>
+            </button>
         </header>
 
         <div class="tabs">
             <button class="tab-btn active" data-tab="front"><i class="fas fa-id-card"></i> Front ID</button>
             <button class="tab-btn" data-tab="back"><i class="fas fa-address-card"></i> Back ID</button>
             <button class="tab-btn" data-tab="records"><i class="fas fa-database"></i> Records</button>
+            <button class="tab-btn" data-tab="printlog"><i class="fas fa-clipboard-list"></i> Print Log</button>
         </div>
 
         <div class="content">
@@ -182,8 +196,15 @@
                                     <select id="city-select" class="hidden-select">
                                         <option value="">Select city</option>
                                     </select>
-                                    <div class="select-options" id="city-options">
-                                        <div class="option" data-value="">Select city</div>
+                                    <div class="select-options searchable">
+                                        <div class="select-search">
+                                            <i class="fas fa-search"></i>
+                                            <input type="text" class="select-search-input" placeholder="Search city..." autocomplete="off" aria-label="Search city">
+                                        </div>
+                                        <div id="city-options">
+                                            <div class="option" data-value="">Select city</div>
+                                        </div>
+                                        <div class="select-no-results" hidden>No city matches your search</div>
                                     </div>
                                 </div>
                             </div>
@@ -356,7 +377,7 @@
                             <table id="records-table">
                                 <thead>
                                     <tr class="group-row">
-                                        <th colspan="9" class="group-employee">Employee</th>
+                                        <th colspan="10" class="group-employee">Employee</th>
                                         <th colspan="4" class="group-emergency">Emergency Contact</th>
                                         <th class="group-actions"></th>
                                     </tr>
@@ -370,6 +391,7 @@
                                         <th data-sort="cityOfBirth">City of Birth</th>
                                         <th data-sort="isRehire">Rehire</th>
                                         <th>Cards</th>
+                                        <th data-sort="printCount" title="Times sent to the printer (front / back)">Printed</th>
                                         <th class="emergency-header" data-sort="emergencyName">Name</th>
                                         <th class="emergency-header" data-sort="relationship">Relationship</th>
                                         <th class="emergency-header" data-sort="contact">Contact No.</th>
@@ -383,6 +405,75 @@
                                 <i class="fas fa-folder-open"></i>
                                 <h4 id="records-empty-title">No records yet</h4>
                                 <p id="records-empty-text">Generated IDs will appear here.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Print Log Panel: every card side sent to the printer -->
+                <div class="tab-panel" id="printlog-panel">
+                    <div class="form-card records-card">
+                        <div class="form-card-header">
+                            <div class="form-card-icon"><i class="fas fa-clipboard-list"></i></div>
+                            <div>
+                                <h3>Print Log</h3>
+                                <p>Every card side sent to the ID printer. "Sent" - a cancelled print dialog or printer jam is not detected.</p>
+                            </div>
+                        </div>
+
+                        <div class="log-stats">
+                            <div class="log-stat warn">
+                                <span class="log-stat-label">Reprints</span>
+                                <span class="log-stat-value" id="logStatReprints">0</span>
+                                <span class="log-stat-sub" id="logStatReasons">&nbsp;</span>
+                            </div>
+                            <div class="log-stat">
+                                <span class="log-stat-label">Cards printed</span>
+                                <span class="log-stat-value" id="logStatCards">0</span>
+                                <span class="log-stat-sub">different control numbers</span>
+                            </div>
+                        </div>
+
+                        <div class="records-toolbar">
+                            <div class="log-filters">
+                                <div class="segmented log-range" role="radiogroup" aria-label="Period">
+                                    <button type="button" class="seg-btn" data-range="today" role="radio" aria-checked="false">Today</button>
+                                    <button type="button" class="seg-btn" data-range="week" role="radio" aria-checked="false">7 days</button>
+                                    <button type="button" class="seg-btn active" data-range="month" role="radio" aria-checked="true">This month</button>
+                                    <button type="button" class="seg-btn" data-range="all" role="radio" aria-checked="false">All time</button>
+                                </div>
+                                <label class="switch-label log-reprints-only">
+                                    <input type="checkbox" class="toggle-input" id="logReprintsOnly">
+                                    <span class="toggle-slider"></span>
+                                    <span>Only reprints</span>
+                                </label>
+                            </div>
+                            <div class="search-box">
+                                <i class="fas fa-search"></i>
+                                <input type="text" id="log-search" class="records-search-input" placeholder="Search name, control number, reason...">
+                            </div>
+                        </div>
+
+                        <div class="table-wrapper">
+                            <table id="log-table">
+                                <thead>
+                                    <tr>
+                                        <th>Date &amp; time</th>
+                                        <th>Employee</th>
+                                        <th>Control No.</th>
+                                        <th>Side</th>
+                                        <th>Type</th>
+                                        <th>Reason</th>
+                                        <th>Printer</th>
+                                        <th class="actions-header">View</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                            <div class="records-empty" id="log-empty" hidden>
+                                <i class="fas fa-print"></i>
+                                <h4 id="log-empty-title">Nothing printed yet</h4>
+                                <p id="log-empty-text">Cards appear here when they are sent to the printer.</p>
                             </div>
                         </div>
                     </div>
@@ -402,6 +493,10 @@
                 <button id="downloadBtn" class="download-btn" disabled>
                     <img src="../icons/download-icon.png" alt="" class="btn-icon">
                     <span>Download SVG for Corel</span>
+                </button>
+                <button id="printBtn" class="print-btn" disabled title="Download the card first">
+                    <i class="fas fa-print"></i>
+                    <span>Print Front</span>
                 </button>
             </div>
             <p id="status" class="status info"><i class="fas fa-info-circle"></i> <span id="status-text">Fill in the
@@ -435,10 +530,10 @@
                 Enter your PIN to authorize database reset.
             </div>
             <div class="pin-inputs" id="resetPinInputs">
-                <input type="password" maxlength="1" class="pin-box" data-index="0">
-                <input type="password" maxlength="1" class="pin-box" data-index="1">
-                <input type="password" maxlength="1" class="pin-box" data-index="2">
-                <input type="password" maxlength="1" class="pin-box" data-index="3">
+                <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="0">
+                <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="1">
+                <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="2">
+                <input type="password" maxlength="1" class="pin-box" placeholder=" " data-index="3">
             </div>
             <div id="resetPinError" class="lock-error"></div>
             <div class="modal-actions">
@@ -469,14 +564,75 @@
                     <div class="preview-frame" id="previewBack"></div>
                 </figure>
             </div>
+            <div class="print-history" id="printHistory">
+                <div class="print-history-title"><i class="fas fa-history"></i> Print history</div>
+                <ul class="print-history-list" id="printHistoryList"></ul>
+            </div>
+            <div class="flip-notice warning" id="printWarning" hidden>
+                <i class="fas fa-exclamation-triangle"></i>
+                <span id="printWarningText"></span>
+            </div>
             <div class="preview-footer">
                 <span class="preview-note"><i class="fas fa-info-circle"></i> Showing the saved SVG files. Fonts may look slightly different in CorelDRAW.</span>
-                <button class="modal-btn modal-btn-cancel" id="previewFolderBtn">
-                    <i class="fas fa-folder-open"></i> Open Folder
-                </button>
+                <div class="preview-actions">
+                    <button class="modal-btn modal-btn-cancel" id="previewFolderBtn">
+                        <i class="fas fa-folder-open"></i> Open Folder
+                    </button>
+                    <button class="modal-btn print-side-btn" id="printFrontBtn" title="Print only the front">
+                        <i class="fas fa-print"></i> Front only
+                    </button>
+                    <button class="modal-btn print-side-btn" id="printBackBtn" title="Print only the back">
+                        <i class="fas fa-print"></i> Back only
+                    </button>
+                    <button class="modal-btn print-btn" id="printBothBtn" title="Print the front and back of the card in one go">
+                        <i class="fas fa-print"></i> Print Both Sides
+                    </button>
+                </div>
             </div>
         </div>
     </div>
+
+    <!-- Asked before a card side that was already printed is printed again -->
+    <div id="reprintModal" class="modal-overlay reprint-overlay" style="display: none;">
+        <div class="modal-card reprint-card" role="dialog" aria-modal="true" aria-labelledby="reprintTitle">
+            <div class="modal-icon reprint-icon">
+                <i class="fas fa-redo-alt"></i>
+            </div>
+            <div class="modal-title" id="reprintTitle">Reprint card</div>
+            <div class="modal-description" id="reprintDescription"></div>
+            <div class="reprint-reasons" role="radiogroup" aria-label="Reason for reprint">
+                <button type="button" class="reason-btn" data-reason="Lost"><i class="fas fa-search"></i> Lost</button>
+                <button type="button" class="reason-btn" data-reason="Damaged"><i class="fas fa-heart-broken"></i> Damaged</button>
+                <button type="button" class="reason-btn" data-reason="Misprint"><i class="fas fa-print"></i> Misprint</button>
+                <button type="button" class="reason-btn" data-reason="Other"><i class="fas fa-ellipsis-h"></i> Other</button>
+            </div>
+            <input type="text" id="reprintNote" class="reprint-note" placeholder="Details (optional)" maxlength="120" autocomplete="off">
+            <div class="modal-actions">
+                <button id="reprintCancelBtn" class="modal-btn modal-btn-cancel">Cancel</button>
+                <button id="reprintConfirmBtn" class="modal-btn print-btn" disabled><i class="fas fa-print"></i> Reprint</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Asked after the print dialog closes: the app cannot tell whether Print or Cancel was clicked -->
+    <div id="printConfirmModal" class="modal-overlay reprint-overlay" style="display: none;">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="printConfirmTitle">
+            <div class="modal-icon print-confirm-icon">
+                <i class="fas fa-print"></i>
+            </div>
+            <div class="modal-title" id="printConfirmTitle">Did the card print?</div>
+            <div class="modal-description" id="printConfirmDescription">
+                Only prints you confirm are recorded in the print log.
+            </div>
+            <div class="modal-actions">
+                <button id="printConfirmNoBtn" class="modal-btn modal-btn-cancel">No, cancelled or failed</button>
+                <button id="printConfirmYesBtn" class="modal-btn print-btn"><i class="fas fa-check"></i> Yes, it printed</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Only this is printed: one card side at exact CR80 size (see @media print in styles.css) -->
+    <div id="print-area" aria-hidden="true"></div>
 
     <script src="./phone.js"></script>
     <script src="./renderer.js"></script>

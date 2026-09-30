@@ -20,6 +20,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fastrand = "2"
 # crop / pad the ID photo and signature to their card boxes (CorelDRAW ignores SVG preserveAspectRatio)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# QR code on the back ID (only the module grid is used; it is drawn as an SVG path)
+qrcode = { version = "0.14", default-features = false }
 
 [profile.release]
 codegen-units = 1

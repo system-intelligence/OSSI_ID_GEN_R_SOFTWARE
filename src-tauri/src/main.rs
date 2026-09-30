@@ -7,6 +7,8 @@ mod db;
 mod format;
 mod images;
 mod paths;
+mod printer;
+mod qr;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::{json, Value};
@@ -263,6 +265,8 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
             ("{{ADDRESS_LINE2}}", address2.to_string()),
             ("{{CONTACT_NO}}", format_contact_number(text(data, "contact"))),
             ("{{AUTHORIZED_SIGNATURE}}", authorized_signature),
+            // QR of the card's control number, so scanning it identifies the employee record
+            ("{{QR_CODE}}", qr::qr_svg_path(control_number, qr::QR_X, qr::QR_Y, qr::QR_SIZE)?),
         ];
     }
 
@@ -340,6 +344,51 @@ fn get_card_preview(state: State<AppState>, control_number: String) -> Value {
     })
 }
 
+// ---------- print log ----------
+
+#[tauri::command]
+fn log_print(state: State<AppState>, control_number: String, side: String, reason: Option<String>, printer: Option<String>) -> Value {
+    if control_number.trim().is_empty() || !matches!(side.as_str(), "front" | "back") {
+        return json!({ "success": false, "error": "A print needs a control number and a side (front or back)" });
+    }
+    match state.db.log_print(&control_number, &side, reason.as_deref().unwrap_or(""), printer.as_deref().unwrap_or("")) {
+        Ok(entry) => json!({ "success": true, "entry": entry }),
+        Err(err) => json!({ "success": false, "error": err.to_string() }),
+    }
+}
+
+#[tauri::command]
+fn get_print_history(state: State<AppState>, control_number: String) -> Value {
+    match state.db.print_history(&control_number) {
+        Ok(history) => json!({ "success": true, "history": history }),
+        Err(err) => json!({ "success": false, "error": err.to_string() }),
+    }
+}
+
+#[tauri::command]
+fn get_print_log(state: State<AppState>) -> Value {
+    match state.db.print_log_entries() {
+        Ok(entries) => json!({ "success": true, "entries": entries }),
+        Err(err) => json!({ "success": false, "error": err.to_string() }),
+    }
+}
+
+#[tauri::command]
+fn get_print_summary(state: State<AppState>) -> Value {
+    state.db.print_summary().map(Value::Object).unwrap_or_else(|err| {
+        eprintln!("get-print-summary error: {err}");
+        json!({})
+    })
+}
+
+// Asking Windows takes about a second, so it runs off the main thread to keep the window responsive
+#[tauri::command]
+async fn get_printer_status() -> Value {
+    tauri::async_runtime::spawn_blocking(printer::status)
+        .await
+        .unwrap_or_else(|err| json!({ "state": "unknown", "error": err.to_string() }))
+}
+
 #[tauri::command]
 fn open_card_folder(state: State<AppState>, control_number: String) -> Value {
     let folder = find_card_file(&state, &control_number, "front", "front-id.svg")
@@ -381,7 +430,12 @@ fn main() {
             reset_database,
             generate_svg,
             get_card_preview,
-            open_card_folder
+            open_card_folder,
+            get_printer_status,
+            log_print,
+            get_print_history,
+            get_print_summary,
+            get_print_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running ID Card Generator");
