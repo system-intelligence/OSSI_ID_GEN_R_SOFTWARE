@@ -22,6 +22,9 @@ fastrand = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # QR code on the back ID (only the module grid is used; it is drawn as an SVG path)
 qrcode = { version = "0.14", default-features = false }
+# Measures centred card text with the installed fonts (same shaping as Chrome/WebView2) so it can be
+# written left-anchored, which CorelDRAW imports exactly
+rustybuzz = "0.20"
 
 [profile.release]
 codegen-units = 1

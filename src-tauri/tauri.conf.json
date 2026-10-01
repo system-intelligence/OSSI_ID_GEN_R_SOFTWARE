@@ -34,7 +34,8 @@
     "shortDescription": "OSSI employee ID card generator",
     "resources": {
       "../templates/front-id.svg": "templates/front-id.svg",
-      "../templates/back-id.svg": "templates/back-id.svg"
+      "../templates/back-id.svg": "templates/back-id.svg",
+      "../VP-SIGNATURE.png": "VP-SIGNATURE.png"
     },
     "windows": {
       "nsis": {

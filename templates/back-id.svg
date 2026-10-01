@@ -47,28 +47,28 @@ x="964.1" y="1534.8" width="1012.7" height="110.7"/>
         font-weight="bold"
         text-anchor="middle">AUTHORIZED SIGNATURE</text>
 
-  <!-- If Found Section -->
-  <text x="1062" y="2741.9"
+  <!-- If Found Section: centred vertically between the QR code (bottom 2408.7) and the footer (top ~3081) -->
+  <text x="1062" y="2713.8"
         font-family="Arial"
         font-size="120"
         fill="#333"
         text-anchor="middle">if found, please contact</text>
 
-  <text x="1062" y="2891.9"
+  <text x="1062" y="2863.8"
         font-family="Arial"
         font-size="120"
         fill="#333"
         text-anchor="middle">+63 927-430-1483</text>
   <!-- Footer Disclaimer -->
   <text x="1062"
-        y="3200"
+        y="3142"
         font-family="Arial"
         font-size="85"
         fill="#444"
         text-anchor="middle">This card remains the property of the company</text>
 
   <text x="1062"
-        y="3325"
+        y="3267"
         font-family="Arial"
         font-size="85"
         fill="#444"

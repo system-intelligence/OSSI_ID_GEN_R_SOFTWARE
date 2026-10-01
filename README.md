@@ -47,15 +47,17 @@ cd src-tauri
 cargo tauri build
 ```
 
-The installer is written to `src-tauri/target/release/bundle/nsis/ID Card Generator_1.0.0_x64-setup.exe`.
+`VP-SIGNATURE.png` must be in the project root when building: it is bundled into the installer.
+The installer is written to `src-tauri/target/release/bundle/nsis/OSSI ID Card Generator_1.0.0_x64-setup.exe`.
 Copy that one file to the other PC and run it. It installs for the current Windows user (no administrator rights needed)
-and adds a Start menu shortcut. The card templates are included in the installer.
+and adds a Start menu shortcut. The card templates and the signature are included in the installer,
+so keep the setup file within the office - anyone with a copy can extract the signature from it.
 
 On an installed PC the app keeps its working files in **`Documents\OSSI ID Generator\`**:
 
 | Path | Contents |
 |---|---|
-| `VP-SIGNATURE.png` | **Copy it here by hand** before generating back IDs (it is never bundled) |
+| `VP-SIGNATURE.png` | Optional: a signature placed here replaces the bundled one, without reinstalling |
 | `data\` | `id-generator.db` and `pin-config.json` - the PIN is set on first start |
 | `ID\` | Generated cards for CorelDRAW |
 

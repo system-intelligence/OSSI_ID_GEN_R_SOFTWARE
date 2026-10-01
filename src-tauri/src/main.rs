@@ -9,6 +9,7 @@ mod images;
 mod paths;
 mod printer;
 mod qr;
+mod textfit;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::{json, Value};
@@ -30,6 +31,11 @@ struct AppState {
 // data.key as a string ("" when missing, null or not a string - like `data.key || ''`)
 fn text<'a>(data: &'a Value, key: &str) -> &'a str {
     data.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+// Text typed in the form, made safe to put inside an SVG element ("A & B" would otherwise break the file)
+fn xml_text(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 // JavaScript truthiness for flags such as data.isRehire
@@ -136,12 +142,15 @@ fn reset_database(state: State<AppState>) -> Value {
 
 // ---------- ID card generation ----------
 
-// Authorized representative's signature printed on the back ID (kept in the project root so it can be swapped)
+// Authorized representative's signature printed on the back ID: VP-SIGNATURE.png in the working folder
+// (so it can be swapped without reinstalling), else the copy bundled with the installer
 fn load_authorized_signature(state: &AppState) -> Result<String, String> {
-    let path = &state.paths.authorized_signature;
-    let image = fs::read(path).map_err(|_| {
-        format!("Authorized signature not found - copy VP-SIGNATURE.png to {}", path.display())
-    })?;
+    let paths = &state.paths;
+    let image = fs::read(&paths.authorized_signature)
+        .or_else(|_| fs::read(&paths.bundled_signature))
+        .map_err(|_| {
+            format!("Authorized signature not found - copy VP-SIGNATURE.png to {}", paths.authorized_signature.display())
+        })?;
     Ok(format!("data:image/png;base64,{}", BASE64.encode(image)))
 }
 
@@ -198,10 +207,10 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
             // Box sizes match the <image> elements in templates/front-id.svg
             ("{{ID_PICTURE}}", images::photo_for_box(text(data, "idPicture"), 972.0, 982.0)),
             ("{{SIGNATURE_PICTURE}}", images::signature_for_box(text(data, "signaturePicture"), 1125.0, 250.0)),
-            ("{{CONTROL_NUMBER}}", control_number.clone()),
-            ("{{LAST_NAME}}", last_name_with_suffix.to_uppercase()),
-            ("{{FIRST_NAME}}", first_name_with_middle.to_uppercase()),
-            ("{{POSITION}}", text(data, "position").to_string()),
+            ("{{CONTROL_NUMBER}}", xml_text(&control_number)),
+            ("{{LAST_NAME}}", xml_text(&last_name_with_suffix.to_uppercase())),
+            ("{{FIRST_NAME}}", xml_text(&first_name_with_middle.to_uppercase())),
+            ("{{POSITION}}", xml_text(text(data, "position"))),
         ];
         folder = format!("{control_number}_{last_name}_{first_name}");
         file_name = "front-id.svg";
@@ -261,11 +270,11 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
         .map_err(err)?;
 
         replacements = vec![
-            ("{{NAME}}", text(data, "name").to_string()),
-            ("{{RELATIONSHIP}}", text(data, "relationship").to_string()),
-            ("{{ADDRESS}}", format_address_line1(address1, address2)),
-            ("{{ADDRESS_LINE2}}", address2.to_string()),
-            ("{{CONTACT_NO}}", format_contact_number(text(data, "contact"))),
+            ("{{NAME}}", xml_text(text(data, "name"))),
+            ("{{RELATIONSHIP}}", xml_text(text(data, "relationship"))),
+            ("{{ADDRESS}}", xml_text(&format_address_line1(address1, address2))),
+            ("{{ADDRESS_LINE2}}", xml_text(address2)),
+            ("{{CONTACT_NO}}", xml_text(&format_contact_number(text(data, "contact")))),
             ("{{AUTHORIZED_SIGNATURE}}", authorized_signature),
             // QR of the card's control number, so scanning it identifies the employee record
             ("{{QR_CODE}}", qr::qr_svg_path(control_number, qr::QR_X, qr::QR_Y, qr::QR_SIZE)?),
@@ -276,6 +285,9 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
     for (key, value) in &replacements {
         svg = svg.replace(key, value);
     }
+    // Centred lines get an exact left position measured with the installed fonts, so CorelDRAW shows
+    // them exactly where the browser does (see textfit.rs)
+    let svg = textfit::left_align_centred_text_with_installed_fonts(&svg);
 
     let output_dir = state.paths.id_output.join(&folder);
     fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
@@ -479,6 +491,42 @@ mod tests {
             .collect();
         results.push(json!({ "label": "records", "records": state.db.get_all_id_records().unwrap() }));
         fs::write(base.join("results.json"), serde_json::to_string_pretty(&results).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn form_text_is_escaped_for_svg() {
+        assert_eq!(xml_text("Bldg A & B <2F>"), "Bldg A &amp; B &lt;2F&gt;");
+        assert_eq!(xml_text("JUAN DELA CRUZ"), "JUAN DELA CRUZ");
+    }
+
+    // Writes each template twice with sample text - browser-centred (text-anchor) and left-aligned by
+    // textfit - so the two can be rendered and compared pixel by pixel.
+    // Run with: OSSI_TEXTFIT_OUT=<folder> cargo test textfit_comparison -- --ignored
+    #[test]
+    #[ignore]
+    fn textfit_comparison() {
+        let out = std::path::PathBuf::from(std::env::var("OSSI_TEXTFIT_OUT").expect("OSSI_TEXTFIT_OUT"));
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("templates");
+        let sample = [
+            ("{{CONTROL_NUMBER}}", "270223CAB-9671-RH"),
+            ("{{LAST_NAME}}", "DELA CRUZ JR."),
+            ("{{FIRST_NAME}}", "JUAN MIGUEL D."),
+            ("{{POSITION}}", "SECURITY GUARD"),
+            ("{{NAME}}", "Maria S. Dela Cruz"),
+            ("{{RELATIONSHIP}}", "Mother"),
+            ("{{ADDRESS}}", "123 Rizal St, Brgy. Baesa,"),
+            ("{{ADDRESS_LINE2}}", "Quezon City"),
+            ("{{CONTACT_NO}}", "+63 917-123-4567"),
+        ];
+        for name in ["front-id.svg", "back-id.svg"] {
+            let mut svg = fs::read_to_string(base.join(name)).unwrap();
+            for (key, value) in sample {
+                svg = svg.replace(key, value);
+            }
+            fs::write(out.join(format!("centred-{name}")), &svg).unwrap();
+            fs::write(out.join(format!("textfit-{name}")), textfit::left_align_centred_text_with_installed_fonts(&svg))
+                .unwrap();
+        }
     }
 
     #[test]

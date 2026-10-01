@@ -46,7 +46,10 @@ pub struct Paths {
     pub front_template: PathBuf,
     pub back_template: PathBuf,
     pub id_output: PathBuf,
+    // VP-SIGNATURE.png: a copy in the working folder wins, so the signature can be replaced without
+    // reinstalling; otherwise the one bundled with the installer (next to the templates) is used
     pub authorized_signature: PathBuf,
+    pub bundled_signature: PathBuf,
 }
 
 // data/<file>, unless only the Electron app's src/<file> exists (OSSI_BASE_DIR pointed at the old project)
@@ -66,6 +69,7 @@ impl Paths {
             back_template: resources.join("templates").join("back-id.svg"),
             id_output: work.join("ID"),
             authorized_signature: work.join("VP-SIGNATURE.png"),
+            bundled_signature: resources.join("VP-SIGNATURE.png"),
         }
     }
 }
@@ -114,6 +118,7 @@ mod tests {
         assert_eq!(paths.database, docs.join(WORK_FOLDER_NAME).join("data").join("id-generator.db"));
         assert_eq!(paths.id_output, docs.join(WORK_FOLDER_NAME).join("ID"));
         assert_eq!(paths.authorized_signature, docs.join(WORK_FOLDER_NAME).join("VP-SIGNATURE.png"));
+        assert_eq!(paths.bundled_signature, install.join("VP-SIGNATURE.png"));
         fs::remove_dir_all(&root).unwrap();
     }
 }
