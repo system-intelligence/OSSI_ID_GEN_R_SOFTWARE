@@ -162,6 +162,20 @@ impl Db {
             [],
         )?;
         conn.execute("CREATE INDEX IF NOT EXISTS idx_card_transfers_control ON card_transfers(control_number)", [])?;
+
+        // Corrections made to a card after it was generated: one row per changed field, from -> to
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS card_edits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                control_number TEXT NOT NULL,
+                field TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                edited_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_card_edits_control ON card_edits(control_number)", [])?;
         Ok(())
     }
 
@@ -585,12 +599,56 @@ impl Db {
         tx.commit()
     }
 
+    // Newest record of one side ("front" / "back") of a card - the values the card currently shows
+    pub fn latest_card_record(&self, control_number: &str, record_type: &str) -> rusqlite::Result<Option<Map<String, Value>>> {
+        let rows = self.rows_as_objects(
+            &format!(
+                "SELECT * FROM id_records WHERE control_number = ? AND type = '{}' ORDER BY created_at DESC, id DESC LIMIT 1",
+                if record_type == "back" { "back" } else { "front" }
+            ),
+            control_number,
+        )?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub fn log_card_edits(&self, control_number: &str, changes: &[(String, String, String)]) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let at = now_iso();
+        for (field, old, new) in changes {
+            tx.execute(
+                "INSERT INTO card_edits (control_number, field, old_value, new_value, edited_at) VALUES (?, ?, ?, ?, ?)",
+                params![control_number, field, old, new, at],
+            )?;
+        }
+        tx.commit()
+    }
+
+    // Edit history of one card, newest first
+    pub fn card_edits(&self, control_number: &str) -> rusqlite::Result<Vec<Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT field, old_value, new_value, edited_at FROM card_edits
+             WHERE control_number = ? ORDER BY edited_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([control_number], |row| {
+            Ok(json!({
+                "field": row.get::<_, String>(0)?,
+                "oldValue": row.get::<_, Option<String>>(1)?,
+                "newValue": row.get::<_, Option<String>>(2)?,
+                "editedAt": row.get::<_, String>(3)?,
+            }))
+        })?;
+        rows.collect()
+    }
+
     pub fn reset_database(&self) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute("DELETE FROM id_records", [])?;
         conn.execute("DELETE FROM control_numbers", [])?;
         conn.execute("DELETE FROM print_log", [])?;
         conn.execute("DELETE FROM card_transfers", [])?;
+        conn.execute("DELETE FROM card_edits", [])?;
         Ok(())
     }
 }

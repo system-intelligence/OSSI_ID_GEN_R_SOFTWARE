@@ -4,6 +4,7 @@
 
 mod cities;
 mod db;
+mod edit;
 mod format;
 mod images;
 mod paths;
@@ -375,7 +376,12 @@ fn log_print(state: State<AppState>, control_number: String, side: String, reaso
 #[tauri::command]
 fn get_print_history(state: State<AppState>, control_number: String) -> Value {
     match (state.db.print_history(&control_number), state.db.card_transfers(&control_number)) {
-        (Ok(history), Ok(transfers)) => json!({ "success": true, "history": history, "transfers": transfers }),
+        (Ok(history), Ok(transfers)) => json!({
+            "success": true,
+            "history": history,
+            "transfers": transfers,
+            "edits": state.db.card_edits(&control_number).unwrap_or_default(),
+        }),
         (Err(err), _) | (_, Err(err)) => json!({ "success": false, "error": err.to_string() }),
     }
 }
@@ -597,6 +603,21 @@ fn import_print_transfer(state: State<AppState>, data_base64: String, password: 
     import_cards(&state, &data_base64, &password).unwrap_or_else(|error| json!({ "success": false, "error": error }))
 }
 
+// ---------- correcting a saved card (see edit.rs) ----------
+
+#[tauri::command]
+fn get_card_for_edit(state: State<AppState>, control_number: String) -> Value {
+    match edit::load(&state, &control_number) {
+        Ok(card) => json!({ "success": true, "card": card }),
+        Err(error) => json!({ "success": false, "error": error }),
+    }
+}
+
+#[tauri::command]
+fn update_card(state: State<AppState>, control_number: String, changes: Value) -> Value {
+    edit::save(&state, &control_number, &changes).unwrap_or_else(|error| json!({ "success": false, "error": error }))
+}
+
 #[tauri::command]
 fn open_exports_folder(state: State<AppState>) -> Value {
     if let Err(err) = fs::create_dir_all(&state.paths.exports_dir) {
@@ -636,7 +657,9 @@ fn main() {
             get_export_candidates,
             export_for_printing,
             import_print_transfer,
-            open_exports_folder
+            open_exports_folder,
+            get_card_for_edit,
+            update_card
         ])
         .run(tauri::generate_context!())
         .expect("error while running ID Card Generator");
@@ -760,6 +783,97 @@ mod tests {
         drop((pc_a, pc_b));
         let _ = fs::remove_dir_all(work_a);
         let _ = fs::remove_dir_all(work_b);
+    }
+
+    #[test]
+    fn correcting_a_printed_card_keeps_its_number_and_photo() {
+        if !std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../VP-SIGNATURE.png").is_file() {
+            return;
+        }
+        let (pc, work) = test_pc("edit");
+        // A card with a photo, already printed
+        let photo = {
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgb8(40, 40).write_to(&mut png, image::ImageFormat::Png).unwrap();
+            format!("data:image/png;base64,{}", BASE64.encode(png.into_inner()))
+        };
+        let front = generate_card(
+            &pc,
+            &json!({ "isFront": true, "firstName": "JUAN", "lastName": "DELA CRSU", "position": "SECURITY GUARD",
+                     "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY", "idPicture": photo }),
+        )
+        .unwrap();
+        let control = front["controlNumber"].as_str().unwrap().to_string();
+        generate_card(
+            &pc,
+            &json!({ "isFront": false, "controlNumber": control, "name": "Maria Cruz", "relationship": "Mother",
+                     "addressLine1": "123 Rizal St", "addressLine2": "Quezon City", "contact": "0917123456",
+                     "surname": "DELA CRSU", "firstName": "JUAN", "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY" }),
+        )
+        .unwrap();
+        pc.db.log_print(&control, "front", "", "SMART-51").unwrap();
+        let old_front = find_card_file(&pc, &control, "front", "front-id.svg").unwrap();
+
+        // The edit form gets the current values and the photo back from the saved card
+        let loaded = edit::load(&pc, &control).unwrap();
+        assert_eq!(loaded["front"]["lastName"], "DELA CRSU");
+        assert_eq!(loaded["back"]["contact"], "0917123456");
+        assert!(loaded["idPicture"].as_str().unwrap().starts_with("data:image/jpeg;base64,"));
+        assert_eq!(loaded["timesPrinted"], 1);
+
+        // Nothing changed -> nothing regenerated or logged
+        assert!(edit::save(&pc, &control, &json!({})).unwrap()["changed"].as_array().unwrap().is_empty());
+
+        // Fix the surname typo and the contact number; a hire date in the request is ignored (locked)
+        let saved = edit::save(
+            &pc,
+            &control,
+            &json!({ "lastName": "dela cruz", "contact": "09171234567", "hireDate": "2020-01-01" }),
+        )
+        .unwrap();
+        assert_eq!(saved["needsReprint"], true);
+        let changed: Vec<String> = saved["changed"].as_array().unwrap().iter()
+            .map(|c| format!("{}: {} -> {}", c["field"].as_str().unwrap(), c["oldValue"].as_str().unwrap(), c["newValue"].as_str().unwrap()))
+            .collect();
+        assert_eq!(changed, vec!["Last name: DELA CRSU -> DELA CRUZ", "Contact number: 0917123456 -> 09171234567"]);
+
+        // Same control number, regenerated in the corrected folder, old folder gone, photo kept
+        let new_front = find_card_file(&pc, &control, "front", "front-id.svg").unwrap();
+        let new_back = find_card_file(&pc, &control, "back", "back-id.svg").unwrap();
+        assert!(new_front.to_string_lossy().contains(&format!("{control}_DELA CRUZ_JUAN")), "{new_front:?}");
+        assert_eq!(new_front.parent(), new_back.parent());
+        assert!(!old_front.exists() && !old_front.parent().unwrap().exists(), "outdated card files must be removed");
+        let svg = fs::read_to_string(&new_front).unwrap();
+        assert!(svg.contains("DELA CRUZ") && !svg.contains("DELA CRSU") && svg.contains(&control));
+        assert!(edit::image_href(&svg, "id-pic").unwrap().starts_with("data:image/jpeg;base64,"));
+        assert!(fs::read_to_string(&new_back).unwrap().contains("+63 917-123-4567"));
+        assert_eq!(pc.db.latest_card_record(&control, "front").unwrap().unwrap()["hire_date"], "2026-06-27");
+        assert_eq!(pc.db.card_edits(&control).unwrap().len(), 2);
+        assert!(pc.db.export_candidates().unwrap().is_empty(), "a printed card is still not sendable");
+
+        drop(pc);
+        let _ = fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn a_card_sent_to_another_pc_cannot_be_edited_here() {
+        let (pc, work) = test_pc("edit-sent");
+        let record = IdRecord {
+            first_name: "ANA",
+            last_name: "REYES",
+            hire_date: "2026-06-27",
+            city_of_birth: "ANGELES CITY",
+            control_number: "260627ANG-0001",
+            ..Default::default()
+        };
+        pc.db.save_id_record("front", &record).unwrap();
+        pc.db.mark_sent_out(&["260627ANG-0001".to_string()], "").unwrap();
+        assert_eq!(edit::load(&pc, "260627ANG-0001").unwrap()["sentOut"], true);
+        let refused = edit::save(&pc, "260627ANG-0001", &json!({ "lastName": "REYES-CRUZ" })).unwrap_err();
+        assert!(refused.contains("sent to another PC"), "{refused}");
+        assert!(pc.db.card_edits("260627ANG-0001").unwrap().is_empty());
+        drop(pc);
+        let _ = fs::remove_dir_all(work);
     }
 
     #[test]

@@ -582,6 +582,9 @@
             <div class="preview-footer">
                 <span class="preview-note"><i class="fas fa-info-circle"></i> Showing the saved SVG files. Fonts may look slightly different in CorelDRAW.</span>
                 <div class="preview-actions">
+                    <button class="modal-btn modal-btn-cancel" id="previewEditBtn" title="Correct a misspelling or update details - the control number stays the same">
+                        <i class="fas fa-pen"></i> Edit
+                    </button>
                     <button class="modal-btn modal-btn-cancel" id="previewFolderBtn">
                         <i class="fas fa-folder-open"></i> Open Folder
                     </button>
@@ -612,6 +615,7 @@
                 <button type="button" class="reason-btn" data-reason="Damaged"><i class="fas fa-heart-broken"></i> Damaged</button>
                 <button type="button" class="reason-btn" data-reason="Misprint"><i class="fas fa-print"></i> Misprint</button>
                 <button type="button" class="reason-btn" data-reason="Other"><i class="fas fa-ellipsis-h"></i> Other</button>
+                <button type="button" class="reason-btn" data-reason="Correction"><i class="fas fa-pen"></i> Correction (card was edited)</button>
             </div>
             <input type="text" id="reprintNote" class="reprint-note" placeholder="Details (optional)" maxlength="120" autocomplete="off">
             <div class="modal-actions">
@@ -634,6 +638,66 @@
             <div class="modal-actions">
                 <button id="printConfirmNoBtn" class="modal-btn modal-btn-cancel">No, cancelled or failed</button>
                 <button id="printConfirmYesBtn" class="modal-btn print-btn"><i class="fas fa-check"></i> Yes, it printed</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Correct a saved card: same control number, every change is logged -->
+    <div id="editModal" class="modal-overlay edit-overlay" style="display: none;">
+        <div class="preview-card edit-card" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+            <div class="preview-header">
+                <div>
+                    <h3 id="editTitle">Edit card</h3>
+                    <span class="edit-subtitle">Fix a misspelling or update details. The control number never changes.</span>
+                </div>
+                <button class="preview-close" id="editCloseBtn" aria-label="Close"><i class="fas fa-times"></i></button>
+            </div>
+
+            <div class="edit-body">
+                <div class="edit-locked" id="editLocked"></div>
+
+                <div class="edit-section">
+                    <div class="edit-section-title"><span class="card-chip front">Front</span> Employee</div>
+                    <div class="edit-grid">
+                        <div class="field"><label for="edit-lastName">Last Name</label><input type="text" id="edit-lastName" class="edit-upper"></div>
+                        <div class="field"><label for="edit-firstName">First Name</label><input type="text" id="edit-firstName" class="edit-upper"></div>
+                        <div class="field"><label for="edit-middleInitial">Middle Initial</label><input type="text" id="edit-middleInitial" class="edit-upper" maxlength="3"></div>
+                        <div class="field"><label for="edit-suffix">Suffix</label><select id="edit-suffix" class="edit-select"></select></div>
+                        <div class="field span-2"><label for="edit-position">Position</label><input type="text" id="edit-position" class="edit-upper" list="edit-position-options"><datalist id="edit-position-options"></datalist></div>
+                    </div>
+                    <div class="edit-images">
+                        <div class="edit-image">
+                            <span class="edit-image-label">ID Photo</span>
+                            <div class="edit-thumb"><img id="edit-photo" alt="ID photo"></div>
+                            <label class="transfer-btn edit-replace"><i class="fas fa-image"></i> Replace<input type="file" id="edit-photo-file" accept="image/*" hidden></label>
+                        </div>
+                        <div class="edit-image">
+                            <span class="edit-image-label">Employee Signature</span>
+                            <div class="edit-thumb wide"><img id="edit-signature" alt="Signature"></div>
+                            <label class="transfer-btn edit-replace"><i class="fas fa-pen-alt"></i> Replace<input type="file" id="edit-signature-file" accept="image/*" hidden></label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="edit-section" id="editBackSection">
+                    <div class="edit-section-title"><span class="card-chip back">Back</span> Emergency Contact</div>
+                    <div class="edit-grid">
+                        <div class="field span-2"><label for="edit-emergencyName">Full Name</label><input type="text" id="edit-emergencyName"></div>
+                        <div class="field"><label for="edit-relationship">Relationship</label><select id="edit-relationship" class="edit-select"></select></div>
+                        <div class="field"><label for="edit-contact">Contact Number</label><input type="text" id="edit-contact" inputmode="tel"></div>
+                        <div class="field"><label for="edit-address1">Address Line 1</label><input type="text" id="edit-address1" maxlength="29"><span class="field-hint">Max 29 characters</span></div>
+                        <div class="field"><label for="edit-address2">Address Line 2</label><input type="text" id="edit-address2" maxlength="29"><span class="field-hint">Max 29 characters</span></div>
+                    </div>
+                </div>
+                <div class="transfer-error" id="editError" role="alert"></div>
+            </div>
+
+            <div class="preview-footer">
+                <span class="preview-note"><i class="fas fa-history"></i> Every change is recorded in the card's history.</span>
+                <div class="preview-actions">
+                    <button class="modal-btn modal-btn-cancel" id="editCancelBtn">Cancel</button>
+                    <button class="modal-btn print-btn" id="editSaveBtn"><i class="fas fa-save"></i> Save Changes</button>
+                </div>
             </div>
         </div>
     </div>

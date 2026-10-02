@@ -24,6 +24,8 @@ const ipcRenderer = {
             case 'export-for-printing': return invoke('export_for_printing', { password: args[0] });
             case 'import-print-transfer': return invoke('import_print_transfer', { dataBase64: args[0], password: args[1] });
             case 'open-exports-folder': return invoke('open_exports_folder');
+            case 'get-card-for-edit': return invoke('get_card_for_edit', { controlNumber: args[0] });
+            case 'update-card': return invoke('update_card', { controlNumber: args[0], changes: args[1] });
             default: return Promise.reject(new Error(`Unknown channel: ${channel}`));
         }
     }
@@ -1745,11 +1747,22 @@ async function loadPrintHistory(controlNumber) {
         const result = await ipcRenderer.invoke('get-print-history', controlNumber);
         if (previewControlNumber !== controlNumber) return;
         const history = result.history || [];
-        if (!history.length) {
+        const sentOut = (result.transfers || []).some(t => t.direction === 'out');
+        previewEditBtn.disabled = sentOut;
+        previewEditBtn.title = sentOut
+            ? 'This card was sent to another PC for printing - correct it on that PC'
+            : 'Correct a misspelling or update details - the control number stays the same';
+        const edits = (result.edits || []).map(e => `
+            <li>
+                <span class="badge badge-edit"><i class="fas fa-pen"></i> Edited</span>
+                <span class="print-history-date">${escapeHtml(formatPrintDate(e.editedAt))}</span>
+                <span class="print-history-reason">${escapeHtml(e.field)}: ${escapeHtml(e.oldValue || '—')} → ${escapeHtml(e.newValue || '—')}</span>
+            </li>`);
+        if (!history.length && !edits.length) {
             list.innerHTML = '<li class="print-history-empty">Not printed yet</li>';
             return;
         }
-        list.innerHTML = history.map(entry => `
+        list.innerHTML = edits.join('') + history.map(entry => `
             <li>
                 <span class="card-chip ${entry.side === 'back' ? 'back' : 'front'}">${entry.side === 'back' ? 'Back' : 'Front'}</span>
                 <span class="print-history-date">${escapeHtml(formatPrintDate(entry.printedAt))}</span>
@@ -1783,6 +1796,165 @@ printBackBtn.addEventListener('click', () => {
     if (previewCards.back) printFromPreview([{ side: 'back', svg: previewCards.back }]);
 });
 
+// ---------- Edit a saved card (same control number, every change logged) ----------
+
+const previewEditBtn = document.getElementById('previewEditBtn');
+const editModal = document.getElementById('editModal');
+const editSaveBtn = document.getElementById('editSaveBtn');
+let editingCard = null;
+let replacedImages = {};
+
+function fillSelect(select, options, current) {
+    const values = options.slice();
+    if (current && !values.some(o => o.value === current)) values.push({ value: current, label: current });
+    select.innerHTML = values.map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
+    select.value = current || '';
+}
+
+function setEditImage(img, dataUrl) {
+    img.src = dataUrl || '';
+    img.parentElement.classList.toggle('empty', !dataUrl);
+}
+
+async function openEditModal() {
+    if (!previewControlNumber) return;
+    const controlNumber = previewControlNumber;
+    document.getElementById('editError').textContent = '';
+    replacedImages = {};
+    try {
+        const result = await ipcRenderer.invoke('get-card-for-edit', controlNumber);
+        if (!result.success) throw new Error(result.error);
+        const card = result.card;
+        if (card.sentOut) throw new Error(card.sentOutMessage);
+        editingCard = card;
+        document.getElementById('editTitle').textContent = `Edit card ${card.front.firstName} ${card.front.lastName}`.trim();
+        document.getElementById('editLocked').innerHTML = `
+            <span class="edit-locked-item"><i class="fas fa-lock"></i> Control No. <span class="control-chip">${escapeHtml(card.controlNumber)}</span></span>
+            <span class="edit-locked-item"><i class="fas fa-lock"></i> Hire date <strong>${escapeHtml(card.locked.hireDate)}</strong></span>
+            <span class="edit-locked-item"><i class="fas fa-lock"></i> City of birth <strong>${escapeHtml(card.locked.cityOfBirth)}</strong></span>
+            ${card.locked.isRehire ? '<span class="badge badge-rehire">Rehire</span>' : ''}
+            <span class="edit-locked-note">Locked because they make up the control number. If one is wrong, make a new card.</span>`;
+        for (const key of ['lastName', 'firstName', 'middleInitial', 'position']) {
+            document.getElementById('edit-' + key).value = card.front[key] || '';
+        }
+        fillSelect(document.getElementById('edit-suffix'),
+            [...document.querySelectorAll('#suffix option')].map(o => ({ value: o.value.trim(), label: o.textContent.trim() })),
+            card.front.suffix);
+        document.getElementById('edit-position-options').innerHTML = [...document.querySelectorAll('#position option')]
+            .filter(o => o.value !== 'OTHERS').map(o => `<option value="${escapeHtml(o.value)}">`).join('');
+        setEditImage(document.getElementById('edit-photo'), card.idPicture);
+        setEditImage(document.getElementById('edit-signature'), card.signaturePicture);
+
+        const backSection = document.getElementById('editBackSection');
+        backSection.hidden = !card.back;
+        if (card.back) {
+            for (const key of ['emergencyName', 'contact', 'address1', 'address2']) {
+                document.getElementById('edit-' + key).value = card.back[key] || '';
+            }
+            fillSelect(document.getElementById('edit-relationship'),
+                [...document.querySelectorAll('#back-relationship option')]
+                    .filter(o => o.value).map(o => ({ value: o.value, label: o.textContent.trim() })),
+                card.back.relationship);
+        }
+        editModal.style.display = 'flex';
+        document.getElementById('edit-lastName').focus();
+    } catch (err) {
+        showPrintWarning(err.message || String(err));
+    }
+}
+
+function closeEditModal() {
+    editModal.style.display = 'none';
+    editingCard = null;
+    replacedImages = {};
+}
+
+function readImageFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('The image could not be read'));
+        reader.readAsDataURL(file);
+    });
+}
+
+[['edit-photo-file', 'edit-photo', 'idPicture'], ['edit-signature-file', 'edit-signature', 'signaturePicture']].forEach(([inputId, imgId, key]) => {
+    document.getElementById(inputId).addEventListener('change', async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        replacedImages[key] = await readImageFile(file);
+        setEditImage(document.getElementById(imgId), replacedImages[key]);
+        e.target.value = '';
+    });
+});
+
+// Front names are printed in capitals, so they are shown in capitals while typing
+document.querySelectorAll('#editModal .edit-upper').forEach(input => {
+    input.addEventListener('input', () => {
+        const pos = input.selectionStart;
+        input.value = input.value.toUpperCase();
+        input.setSelectionRange(pos, pos);
+    });
+});
+
+editSaveBtn.addEventListener('click', async () => {
+    if (!editingCard) return;
+    const value = id => document.getElementById(id).value;
+    const changes = {
+        lastName: value('edit-lastName'),
+        firstName: value('edit-firstName'),
+        middleInitial: value('edit-middleInitial'),
+        suffix: value('edit-suffix'),
+        position: value('edit-position'),
+        ...replacedImages
+    };
+    if (editingCard.back) {
+        Object.assign(changes, {
+            emergencyName: value('edit-emergencyName'),
+            relationship: value('edit-relationship'),
+            address1: value('edit-address1'),
+            address2: value('edit-address2'),
+            contact: value('edit-contact')
+        });
+    }
+    const errorBox = document.getElementById('editError');
+    errorBox.textContent = '';
+    editSaveBtn.disabled = true;
+    editSaveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    try {
+        const controlNumber = editingCard.controlNumber;
+        const result = await ipcRenderer.invoke('update-card', controlNumber, changes);
+        if (!result.success) throw new Error(result.error);
+        if (!result.changed.length) {
+            errorBox.textContent = 'Nothing was changed.';
+            return;
+        }
+        closeEditModal();
+        // The Front/Back tabs may still hold the old version of this card for printing
+        ['front', 'back'].forEach(tab => { if (lastGenerated[tab] && lastGenerated[tab].control === controlNumber) lastGenerated[tab] = null; });
+        updatePrintButton();
+        await openCardPreview(controlNumber, `${changes.firstName} ${changes.middleInitial} ${changes.lastName}`.replace(/\s+/g, ' ').trim());
+        const count = result.changed.length;
+        showPrintWarning(result.needsReprint
+            ? `Card corrected (${count} change${count === 1 ? '' : 's'}). It was already printed: print it again with the reason "Correction", and collect the old card.`
+            : `Card corrected (${count} change${count === 1 ? '' : 's'}) - ready to print.`);
+        if (activeTab === 'records') loadRecords();
+        if (activeTab === 'printlog') loadPrintLog();
+    } catch (err) {
+        errorBox.textContent = err.message || String(err);
+    } finally {
+        editSaveBtn.disabled = false;
+        editSaveBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+    }
+});
+
+previewEditBtn.addEventListener('click', openEditModal);
+document.getElementById('editCancelBtn').addEventListener('click', closeEditModal);
+document.getElementById('editCloseBtn').addEventListener('click', closeEditModal);
+editModal.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); closeEditModal(); }
+});
+
 function closeCardPreview() {
     previewModal.style.display = 'none';
     resetPreviewPrinting({ front: null, back: null });
@@ -1803,7 +1975,8 @@ previewModal.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
     // Esc in the reprint question closes only that question, not the preview behind it
     if (e.key === 'Escape' && previewModal.style.display !== 'none' &&
-        reprintModal.style.display === 'none' && printConfirmModal.style.display === 'none') closeCardPreview();
+        reprintModal.style.display === 'none' && printConfirmModal.style.display === 'none' &&
+        editModal.style.display === 'none') closeCardPreview();
 });
 
 previewFolderBtn.addEventListener('click', async () => {

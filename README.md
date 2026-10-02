@@ -64,6 +64,17 @@ On an installed PC the app keeps its working files in **`Documents\OSSI ID Gener
 These files survive updates and uninstalling. To move existing records to that PC, copy the `data\` folder
 (and `ID\` for the saved cards) into `Documents\OSSI ID Generator\` before starting the app.
 
+## Correcting a card (Edit)
+
+**Records → View → Edit** fixes a misspelling or updates details without making a new card:
+
+- The **control number never changes**, so **hire date and city of birth are locked** (they make up the number).
+  If one of those is wrong, make a new card instead.
+- The photo and signatures are kept from the saved card; **Replace** swaps them.
+- Saving regenerates the front and back in place and records every change (from → to) in the card's history.
+- If the card was already printed, print it again with the reprint reason **Correction** and collect the old card.
+- A card sent to another PC can only be edited on that PC.
+
 ## Printing on another PC (Send / Receive)
 
 To print cards made on PC A with the ID printer on PC B, without printing any card twice:
