@@ -20,6 +20,10 @@ const ipcRenderer = {
             case 'get-print-history': return invoke('get_print_history', { controlNumber: args[0] });
             case 'get-print-summary': return invoke('get_print_summary');
             case 'get-print-log': return invoke('get_print_log');
+            case 'get-export-candidates': return invoke('get_export_candidates');
+            case 'export-for-printing': return invoke('export_for_printing', { password: args[0] });
+            case 'import-print-transfer': return invoke('import_print_transfer', { dataBase64: args[0], password: args[1] });
+            case 'open-exports-folder': return invoke('open_exports_folder');
             default: return Promise.reject(new Error(`Unknown channel: ${channel}`));
         }
     }
@@ -882,17 +886,20 @@ function formatPrintDate(iso) {
 }
 
 // Resolves with the reason text ("Lost", "Other: left in bus"...) or null when the operator cancels.
-// what: 'card' (both sides), 'front' or 'back'; previous: earlier print_log entries of those sides, newest first
-function askReprintReason(what, previous) {
+// what: 'card' (both sides), 'front' or 'back'; previous: earlier print_log entries of those sides, newest first;
+// sentOut: the transfer record when this card was sent to another PC to be printed there
+function askReprintReason(what, previous, sentOut) {
     const counts = ['front', 'back']
         .map(side => [side, previous.filter(e => e.side === side).length])
         .filter(([, n]) => n > 0)
         .map(([side, n]) => `${side} ${n === 1 ? 'once' : `${n} times`}`)
         .join(', ');
     document.getElementById('reprintTitle').textContent = what === 'card' ? 'Reprint this card?' : `Reprint ${what} of this card?`;
-    document.getElementById('reprintDescription').textContent =
-        `This card was already sent to the printer (${counts}, last on ${formatPrintDate(previous[0].printedAt)}).` +
-        ' Choose a reason for the reprint.';
+    document.getElementById('reprintDescription').textContent = previous.length
+        ? `This card was already sent to the printer (${counts}, last on ${formatPrintDate(previous[0].printedAt)}).` +
+          ' Choose a reason for the reprint.'
+        : `This card was sent to another PC to be printed there (on ${formatPrintDate(sentOut.transferredAt)}).` +
+          ' Printing it here as well makes a duplicate card - continue only if the other PC did not print it, and choose a reason.';
     chosenReason = '';
     reasonButtons.forEach(btn => btn.classList.remove('active'));
     reprintNote.value = '';
@@ -940,8 +947,9 @@ async function printCardSides(controlNumber, sides) {
         try {
             const result = await ipcRenderer.invoke('get-print-history', controlNumber);
             const previous = (result.history || []).filter(entry => sides.some(s => s.side === entry.side));
-            if (previous.length) {
-                reason = await askReprintReason(what, previous);
+            const sentOut = (result.transfers || []).find(t => t.direction === 'out');
+            if (previous.length || sentOut) {
+                reason = await askReprintReason(what, previous, sentOut);
                 if (reason === null) return { cancelled: true };
             }
         } catch (err) {
@@ -1549,6 +1557,8 @@ async function loadRecords() {
             r.printBack = printed.back || 0;
             r.printCount = r.printFront + r.printBack;
             r.lastPrintedAt = printed.lastPrintedAt || '';
+            r.sentOutAt = printed.sentOutAt || '';
+            r.receivedFrom = printed.receivedFrom || '';
         });
         
         if (recordsSearchText.trim()) {
@@ -1629,7 +1639,12 @@ async function loadRecords() {
                     ? `<span class="printed-count${r.printFront > 1 || r.printBack > 1 ? ' reprinted' : ''}" title="Front ${r.printFront}× · Back ${r.printBack}×">`
                         + `<i class="fas fa-print"></i> F${r.printFront} · B${r.printBack}</span>`
                         + `<span class="cell-sub">${escapeHtml(new Date(r.lastPrintedAt).toLocaleDateString([], { day: 'numeric', month: 'short' }))}</span>`
-                    : '<span class="cell-empty">Not printed</span>'}</td>
+                    : r.sentOutAt
+                        ? `<span class="badge badge-transfer" title="Sent to another PC to be printed there"><i class="fas fa-file-export"></i> Sent to other PC</span>`
+                            + `<span class="cell-sub">${escapeHtml(new Date(r.sentOutAt).toLocaleDateString([], { day: 'numeric', month: 'short' }))}</span>`
+                        : '<span class="cell-empty">Not printed</span>'}${r.receivedFrom
+                    ? `<span class="cell-sub" title="Received from another PC"><i class="fas fa-file-import"></i> from ${escapeHtml(r.receivedFrom)}</span>`
+                    : ''}</td>
                 <td class="emergency-cell cell-name">${cell(r.emergencyName)}</td>
                 <td class="emergency-cell">${r.relationship ? `<span class="badge badge-relationship">${escapeHtml(r.relationship)}</span>` : dash}</td>
                 <td class="emergency-cell">${cell(r.contact)}</td>
@@ -1799,6 +1814,158 @@ previewFolderBtn.addEventListener('click', async () => {
     }
 });
 
+// ---------- Send to / receive from another PC ----------
+
+const exportModal = document.getElementById('exportModal');
+const importModal = document.getElementById('importModal');
+const exportPassword = document.getElementById('exportPassword');
+const exportPassword2 = document.getElementById('exportPassword2');
+const exportSendBtn = document.getElementById('exportSendBtn');
+const importFile = document.getElementById('importFile');
+const importPassword = document.getElementById('importPassword');
+const importStartBtn = document.getElementById('importStartBtn');
+const MIN_TRANSFER_PASSWORD = 8;
+let exportCandidateCount = 0;
+
+function transferListHtml(cards, emptyText) {
+    if (!cards.length) return `<div class="transfer-empty">${escapeHtml(emptyText)}</div>`;
+    return cards.map(c => `<div class="transfer-row">
+        <span class="transfer-name">${c.name ? escapeHtml(c.name) : '<span class="cell-empty">—</span>'}</span>
+        <span class="control-chip">${escapeHtml(c.controlNumber)}</span>
+        ${c.reason ? `<span class="transfer-reason">${escapeHtml(c.reason)}</span>` : ''}
+        ${c.hasFront === undefined ? '' : `<span>${c.hasFront ? '<span class="card-chip front">Front</span>' : ''}${c.hasBack ? '<span class="card-chip back">Back</span>' : ''}</span>`}
+    </div>`).join('');
+}
+
+function validateExportForm() {
+    const pass = exportPassword.value;
+    let error = '';
+    if (pass && pass.length < MIN_TRANSFER_PASSWORD) error = `The password needs at least ${MIN_TRANSFER_PASSWORD} characters.`;
+    else if (exportPassword2.value && pass !== exportPassword2.value) error = 'The two passwords do not match.';
+    document.getElementById('exportError').textContent = error;
+    exportSendBtn.disabled = !exportCandidateCount || !!error || !pass || pass !== exportPassword2.value;
+}
+
+async function openExportModal() {
+    document.getElementById('exportForm').hidden = false;
+    document.getElementById('exportResult').hidden = true;
+    exportPassword.value = '';
+    exportPassword2.value = '';
+    document.getElementById('exportError').textContent = '';
+    const list = document.getElementById('exportList');
+    list.innerHTML = '<div class="transfer-empty"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+    exportModal.style.display = 'flex';
+    try {
+        const result = await ipcRenderer.invoke('get-export-candidates');
+        if (!result.success) throw new Error(result.error);
+        exportCandidateCount = result.cards.length;
+        list.innerHTML = (exportCandidateCount
+            ? `<div class="transfer-list-title">${exportCandidateCount} unprinted card${exportCandidateCount === 1 ? '' : 's'} will be sent:</div>`
+            : '') + transferListHtml(result.cards, 'There are no unprinted cards to send. Cards that were printed or already sent are never included.');
+    } catch (err) {
+        exportCandidateCount = 0;
+        list.innerHTML = `<div class="transfer-empty">${escapeHtml(err.message || err)}</div>`;
+    }
+    validateExportForm();
+    exportPassword.focus();
+}
+
+exportPassword.addEventListener('input', validateExportForm);
+exportPassword2.addEventListener('input', validateExportForm);
+
+exportSendBtn.addEventListener('click', async () => {
+    exportSendBtn.disabled = true;
+    exportSendBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Encrypting...';
+    try {
+        const result = await ipcRenderer.invoke('export-for-printing', exportPassword.value);
+        if (!result.success) throw new Error(result.error);
+        const sent = result.sent.length;
+        document.getElementById('exportResultText').textContent =
+            `${sent} card${sent === 1 ? '' : 's'} saved for the other PC and marked "Sent to other PC" here.`;
+        document.getElementById('exportResultPath').textContent = result.path;
+        document.getElementById('exportResultList').innerHTML = transferListHtml(result.sent, '') +
+            (result.skipped.length ? `<div class="transfer-list-title">Kept on this PC:</div>` + transferListHtml(result.skipped, '') : '');
+        document.getElementById('exportForm').hidden = true;
+        document.getElementById('exportResult').hidden = false;
+        exportPassword.value = '';
+        exportPassword2.value = '';
+        if (activeTab === 'records') loadRecords();
+    } catch (err) {
+        document.getElementById('exportError').textContent = err.message || String(err);
+    }
+    exportSendBtn.innerHTML = '<i class="fas fa-lock"></i> Encrypt &amp; Save';
+    validateExportForm();
+});
+
+document.getElementById('exportOpenFolderBtn').addEventListener('click', () => ipcRenderer.invoke('open-exports-folder'));
+
+function validateImportForm() {
+    importStartBtn.disabled = !importFile.files.length || !importPassword.value;
+}
+
+function openImportModal() {
+    document.getElementById('importForm').hidden = false;
+    document.getElementById('importResult').hidden = true;
+    importFile.value = '';
+    importPassword.value = '';
+    document.getElementById('importError').textContent = '';
+    validateImportForm();
+    importModal.style.display = 'flex';
+}
+
+importFile.addEventListener('change', validateImportForm);
+importPassword.addEventListener('input', validateImportForm);
+importPassword.addEventListener('keydown', e => { if (e.key === 'Enter' && !importStartBtn.disabled) importStartBtn.click(); });
+
+function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => reject(new Error('The file could not be read'));
+        reader.readAsDataURL(file);
+    });
+}
+
+importStartBtn.addEventListener('click', async () => {
+    importStartBtn.disabled = true;
+    importStartBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Decrypting...';
+    document.getElementById('importError').textContent = '';
+    try {
+        const data = await readFileAsBase64(importFile.files[0]);
+        const result = await ipcRenderer.invoke('import-print-transfer', data, importPassword.value);
+        if (!result.success) throw new Error(result.error);
+        const added = result.imported.length;
+        document.getElementById('importResultText').textContent =
+            `${added} card${added === 1 ? '' : 's'} added from ${result.sourcePc}${result.skipped.length ? `, ${result.skipped.length} skipped` : ''}.`;
+        document.getElementById('importResultList').innerHTML = transferListHtml(result.imported, 'No new cards in this file.') +
+            (result.skipped.length ? `<div class="transfer-list-title">Skipped (nothing was changed):</div>` + transferListHtml(result.skipped, '') : '');
+        document.getElementById('importForm').hidden = true;
+        document.getElementById('importResult').hidden = false;
+        importPassword.value = '';
+        if (activeTab === 'records') loadRecords();
+    } catch (err) {
+        document.getElementById('importError').textContent = err.message || String(err);
+    }
+    importStartBtn.innerHTML = '<i class="fas fa-unlock"></i> Decrypt &amp; Add';
+    validateImportForm();
+});
+
+function closeTransferModals() {
+    exportModal.style.display = 'none';
+    importModal.style.display = 'none';
+    exportPassword.value = '';
+    exportPassword2.value = '';
+    importPassword.value = '';
+}
+
+document.getElementById('sendToPcBtn').addEventListener('click', openExportModal);
+document.getElementById('receiveFromPcBtn').addEventListener('click', openImportModal);
+['exportCancelBtn', 'exportDoneBtn', 'importCancelBtn', 'importDoneBtn'].forEach(id =>
+    document.getElementById(id).addEventListener('click', closeTransferModals));
+[exportModal, importModal].forEach(modal => modal.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeTransferModals();
+}));
+
 // ---------- Print Log tab: every card side sent to the printer ----------
 
 const logTableBody = document.querySelector('#log-table tbody');
@@ -1823,7 +1990,8 @@ function inLogRange(entry) {
 function renderPrintLogStats(entries) {
     const reprints = entries.filter(e => e.isReprint);
     document.getElementById('logStatReprints').textContent = reprints.length;
-    document.getElementById('logStatCards').textContent = new Set(entries.map(e => e.controlNumber)).size;
+    document.getElementById('logStatCards').textContent =
+        new Set(entries.filter(e => e.side !== 'transfer').map(e => e.controlNumber)).size;
 
     // Most common reasons, e.g. "Lost 3 · Damaged 1" ("Lost: left in jeepney" counts as Lost)
     const reasons = {};
@@ -1842,7 +2010,7 @@ function renderPrintLog() {
     const term = logSearchInput.value.trim().toLowerCase();
     const rows = inPeriod.filter(e =>
         (!logReprintsOnly.checked || e.isReprint) &&
-        (!term || [e.name, e.controlNumber, e.reason, e.printer].some(v => String(v || '').toLowerCase().includes(term)))
+        (!term || [e.name, e.controlNumber, e.reason, e.printer, e.otherPc].some(v => String(v || '').toLowerCase().includes(term)))
     );
 
     const table = document.getElementById('log-table');
@@ -1863,12 +2031,18 @@ function renderPrintLog() {
     const dash = '<span class="cell-empty">—</span>';
     logTableBody.innerHTML = rows.map(e => {
         const printed = new Date(e.printedAt);
-        return `<tr class="${e.isReprint ? 'log-reprint' : ''}">
+        const transfer = e.side === 'transfer';
+        const type = transfer
+            ? (e.direction === 'out'
+                ? '<span class="badge badge-transfer"><i class="fas fa-file-export"></i> Sent to other PC</span>'
+                : `<span class="badge badge-transfer"><i class="fas fa-file-import"></i> Received${e.otherPc ? ` from ${escapeHtml(e.otherPc)}` : ''}</span>`)
+            : e.isReprint ? '<span class="badge badge-rehire">Reprint</span>' : '<span class="badge badge-muted">First print</span>';
+        return `<tr class="${e.isReprint ? 'log-reprint' : transfer ? 'log-transfer' : ''}">
             <td>${escapeHtml(printed.toLocaleDateString())}<span class="cell-sub">${escapeHtml(printed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span></td>
             <td class="cell-name">${e.name ? escapeHtml(e.name) : dash}</td>
             <td><span class="control-chip">${escapeHtml(e.controlNumber)}</span></td>
-            <td><span class="card-chip ${e.side === 'back' ? 'back' : 'front'}">${e.side === 'back' ? 'Back' : 'Front'}</span></td>
-            <td>${e.isReprint ? '<span class="badge badge-rehire">Reprint</span>' : '<span class="badge badge-muted">First print</span>'}</td>
+            <td>${transfer ? dash : `<span class="card-chip ${e.side === 'back' ? 'back' : 'front'}">${e.side === 'back' ? 'Back' : 'Front'}</span>`}</td>
+            <td>${type}</td>
             <td class="log-reason">${e.reason ? escapeHtml(e.reason) : dash}</td>
             <td>${e.printer ? escapeHtml(e.printer) : dash}</td>
             <td class="cell-actions"><button class="view-btn" data-control="${escapeHtml(e.controlNumber)}" data-name="${escapeHtml(e.name)}"><i class="fas fa-eye"></i> View</button></td>

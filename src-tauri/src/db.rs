@@ -148,6 +148,20 @@ impl Db {
             [],
         )?;
         conn.execute("CREATE INDEX IF NOT EXISTS idx_print_log_control ON print_log(control_number)", [])?;
+
+        // Cards handed to another PC for printing ('out') or received from one ('in'). A card sent out is
+        // not printed here again without a reprint reason, so the same card is not printed on two PCs.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS card_transfers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                control_number TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                other_pc TEXT,
+                transferred_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_card_transfers_control ON card_transfers(control_number)", [])?;
         Ok(())
     }
 
@@ -332,7 +346,43 @@ impl Db {
                 "name": name,
             }))
         })?;
-        rows.collect()
+        let mut entries: Vec<Value> = rows.collect::<rusqlite::Result<_>>()?;
+
+        // Hand-offs to / from another PC are shown in the log too (side "transfer"), newest first overall
+        let mut stmt = conn.prepare(
+            "SELECT t.control_number, t.direction, t.other_pc, t.transferred_at,
+                    r.first_name, r.middle_initial, r.last_name, r.suffix
+             FROM card_transfers t
+             LEFT JOIN id_records r ON r.id = (
+                 SELECT id FROM id_records
+                 WHERE control_number = t.control_number AND type = 'front'
+                 ORDER BY created_at DESC, id DESC LIMIT 1
+             )",
+        )?;
+        let transfers = stmt.query_map([], |row| {
+            let name = (4..=7)
+                .filter_map(|i| row.get::<_, Option<String>>(i).ok().flatten())
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            Ok(json!({
+                "controlNumber": row.get::<_, String>(0)?,
+                "side": "transfer",
+                "direction": row.get::<_, String>(1)?,
+                "otherPc": row.get::<_, Option<String>>(2)?,
+                "isReprint": false,
+                "reason": null,
+                "printer": null,
+                "printedAt": row.get::<_, String>(3)?,
+                "name": name,
+            }))
+        })?;
+        for transfer in transfers {
+            entries.push(transfer?);
+        }
+        entries.sort_by(|a, b| b["printedAt"].as_str().cmp(&a["printedAt"].as_str()));
+        Ok(entries)
     }
 
     // Per control number: how many times each side was sent to the printer and when last, for the Records table
@@ -353,7 +403,186 @@ impl Db {
                 }),
             ))
         })?;
+        let mut summary: Map<String, Value> = rows.collect::<rusqlite::Result<_>>()?;
+
+        // Cards sent to / received from another PC: { sentOutAt } or { receivedFrom, receivedAt }
+        let mut stmt = conn.prepare(
+            "SELECT control_number, direction, MAX(other_pc), MAX(transferred_at) FROM card_transfers
+             GROUP BY control_number, direction",
+        )?;
+        let transfers = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?))
+        })?;
+        for transfer in transfers {
+            let (control, direction, other_pc, at) = transfer?;
+            let entry = summary
+                .entry(control)
+                .or_insert_with(|| json!({ "front": 0, "back": 0, "lastPrintedAt": null }));
+            if direction == "out" {
+                entry["sentOutAt"] = Value::String(at);
+            } else {
+                entry["receivedFrom"] = json!(other_pc.unwrap_or_default());
+                entry["receivedAt"] = Value::String(at);
+            }
+        }
+        Ok(summary)
+    }
+
+    // Transfers of one card, newest first (for the reprint check before printing)
+    pub fn card_transfers(&self, control_number: &str) -> rusqlite::Result<Vec<Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT direction, other_pc, transferred_at FROM card_transfers
+             WHERE control_number = ? ORDER BY transferred_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([control_number], |row| {
+            Ok(json!({
+                "direction": row.get::<_, String>(0)?,
+                "otherPc": row.get::<_, Option<String>>(1)?,
+                "transferredAt": row.get::<_, String>(2)?,
+            }))
+        })?;
         rows.collect()
+    }
+
+    // ---------- sending cards to another PC for printing ----------
+
+    // Cards that may be sent: never printed here and never sent or received before
+    pub fn export_candidates(&self) -> rusqlite::Result<Vec<Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT r.control_number, MIN(r.created_at),
+                    MAX(CASE WHEN r.type = 'front' THEN TRIM(COALESCE(r.first_name, '') || ' ' || COALESCE(r.middle_initial, '')
+                        || ' ' || COALESCE(r.last_name, '') || ' ' || COALESCE(r.suffix, '')) END),
+                    MAX(r.type = 'front'), MAX(r.type = 'back')
+             FROM id_records r
+             WHERE COALESCE(r.control_number, '') <> ''
+               AND NOT EXISTS (SELECT 1 FROM print_log p WHERE p.control_number = r.control_number)
+               AND NOT EXISTS (SELECT 1 FROM card_transfers t WHERE t.control_number = r.control_number)
+             GROUP BY r.control_number
+             ORDER BY MIN(r.created_at) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let name: Option<String> = row.get(2)?;
+            Ok(json!({
+                "controlNumber": row.get::<_, String>(0)?,
+                "createdAt": row.get::<_, String>(1)?,
+                "name": name.map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+                "hasFront": row.get::<_, i64>(3)? != 0,
+                "hasBack": row.get::<_, i64>(4)? != 0,
+            }))
+        })?;
+        rows.collect()
+    }
+
+    fn rows_as_objects(&self, sql: &str, control_number: &str) -> rusqlite::Result<Vec<Map<String, Value>>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(sql)?;
+        let names: Vec<String> = stmt.column_names().iter().map(|n| n.to_string()).collect();
+        let rows = stmt.query_map([control_number], |row| {
+            let mut obj = Map::new();
+            for (i, name) in names.iter().enumerate() {
+                if name == "id" {
+                    continue; // row ids are local to each database
+                }
+                let value = match row.get_ref(i)? {
+                    ValueRef::Null => Value::Null,
+                    ValueRef::Integer(n) => json!(n),
+                    ValueRef::Real(f) => json!(f),
+                    ValueRef::Text(t) => Value::String(String::from_utf8_lossy(t).into_owned()),
+                    ValueRef::Blob(_) => Value::Null,
+                };
+                obj.insert(name.clone(), value);
+            }
+            Ok(obj)
+        })?;
+        rows.collect()
+    }
+
+    pub fn card_records(&self, control_number: &str) -> rusqlite::Result<Vec<Map<String, Value>>> {
+        self.rows_as_objects("SELECT * FROM id_records WHERE control_number = ? ORDER BY created_at, id", control_number)
+    }
+
+    pub fn card_reservations(&self, control_number: &str) -> rusqlite::Result<Vec<Map<String, Value>>> {
+        self.rows_as_objects("SELECT * FROM control_numbers WHERE control_number = ?", control_number)
+    }
+
+    // Name on the record already stored here for this control number (None when the number is unused here)
+    pub fn card_owner(&self, control_number: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn();
+        let found: Option<(Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT first_name, last_name FROM id_records WHERE control_number = ?
+                 ORDER BY (type = 'front') DESC, created_at DESC LIMIT 1",
+                [control_number],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(found.map(|(first, last)| format!("{} {}", first.unwrap_or_default(), last.unwrap_or_default()).trim().to_string()))
+    }
+
+    pub fn mark_sent_out(&self, control_numbers: &[String], other_pc: &str) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let at = now_iso();
+        for control in control_numbers {
+            tx.execute(
+                "INSERT INTO card_transfers (control_number, direction, other_pc, transferred_at) VALUES (?, 'out', ?, ?)",
+                params![control, or_null(other_pc), at],
+            )?;
+        }
+        tx.commit()
+    }
+
+    // Adds one received card (its id_records rows and control number reservation) in a single transaction.
+    // Only known columns are copied, so a damaged or crafted file cannot write anything else.
+    pub fn import_card(
+        &self,
+        control_number: &str,
+        records: &[Map<String, Value>],
+        reservations: &[Map<String, Value>],
+        source_pc: &str,
+    ) -> rusqlite::Result<()> {
+        const RECORD_COLUMNS: &[&str] = &[
+            "type", "id_number", "first_name", "last_name", "middle_initial", "suffix", "position", "employee_name",
+            "hire_date", "city_of_birth", "city_code", "address1", "address2", "relationship", "contact", "is_rehire",
+            "created_at", "file_path",
+        ];
+        const RESERVATION_COLUMNS: &[&str] = &[
+            "prefix", "sequence", "is_rehire", "created_at", "employee_name", "hire_date", "city_of_birth", "city_code",
+            "id_number",
+        ];
+        let to_sql = |value: Option<&Value>| -> rusqlite::types::Value {
+            match value {
+                Some(Value::String(s)) => rusqlite::types::Value::Text(s.clone()),
+                Some(Value::Number(n)) if n.is_i64() => rusqlite::types::Value::Integer(n.as_i64().unwrap_or(0)),
+                Some(Value::Number(n)) => rusqlite::types::Value::Real(n.as_f64().unwrap_or(0.0)),
+                Some(Value::Bool(b)) => rusqlite::types::Value::Integer(*b as i64),
+                _ => rusqlite::types::Value::Null,
+            }
+        };
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        for (table, columns, rows, ignore) in [
+            ("id_records", RECORD_COLUMNS, records, ""),
+            ("control_numbers", RESERVATION_COLUMNS, reservations, "OR IGNORE "),
+        ] {
+            let sql = format!(
+                "INSERT {ignore}INTO {table} (control_number, {}) VALUES (?{})",
+                columns.join(", "),
+                ", ?".repeat(columns.len())
+            );
+            for row in rows {
+                let mut values = vec![rusqlite::types::Value::Text(control_number.to_string())];
+                values.extend(columns.iter().map(|c| to_sql(row.get(*c))));
+                tx.execute(&sql, rusqlite::params_from_iter(values))?;
+            }
+        }
+        tx.execute(
+            "INSERT INTO card_transfers (control_number, direction, other_pc, transferred_at) VALUES (?, 'in', ?, ?)",
+            params![control_number, or_null(source_pc), now_iso()],
+        )?;
+        tx.commit()
     }
 
     pub fn reset_database(&self) -> rusqlite::Result<()> {
@@ -361,6 +590,7 @@ impl Db {
         conn.execute("DELETE FROM id_records", [])?;
         conn.execute("DELETE FROM control_numbers", [])?;
         conn.execute("DELETE FROM print_log", [])?;
+        conn.execute("DELETE FROM card_transfers", [])?;
         Ok(())
     }
 }

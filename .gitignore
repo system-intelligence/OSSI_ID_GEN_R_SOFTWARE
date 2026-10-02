@@ -5,6 +5,9 @@ src-tauri/gen/
 # Runtime data - employee records, PIN and generated cards must never be committed
 data/
 ID/
+# "Send to other PC" transfer files - encrypted, but they still hold employee data
+exports/
+*.ossi
 *.db
 *.db-journal
 pin-config.json

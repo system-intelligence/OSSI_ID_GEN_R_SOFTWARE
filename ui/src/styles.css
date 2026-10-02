@@ -2322,3 +2322,196 @@ input[type="text"]:focus {
     border-color: var(--border-color);
     cursor: not-allowed;
 }
+
+/* ---------- Send to / receive from another PC ---------- */
+
+.transfer-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+}
+
+.transfer-actions + .reset-records-btn {
+    margin-left: 8px;
+}
+
+.transfer-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: white;
+    color: var(--primary-color);
+    border: 1.5px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.transfer-btn:hover {
+    border-color: var(--primary-color);
+    background: var(--primary-soft);
+}
+
+.transfer-card {
+    max-width: 520px;
+    text-align: left;
+}
+
+.transfer-card .modal-icon,
+.transfer-card .modal-title {
+    display: flex;
+    margin-left: auto;
+    margin-right: auto;
+    justify-content: center;
+}
+
+.transfer-card .modal-title {
+    text-align: center;
+}
+
+.transfer-card .modal-description {
+    text-align: center;
+    font-size: 0.92rem;
+}
+
+.transfer-icon {
+    background: var(--primary-soft);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.transfer-card label {
+    margin-top: 12px;
+    font-size: 0.85rem;
+}
+
+.transfer-input {
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 0.95rem;
+    background: white;
+}
+
+.transfer-input:focus {
+    outline: none;
+    border-color: var(--secondary-color);
+    box-shadow: var(--focus-ring);
+}
+
+.transfer-list {
+    max-height: 190px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    padding: 6px 10px;
+    margin-bottom: 6px;
+}
+
+.transfer-list:empty {
+    display: none;
+}
+
+.transfer-list-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 6px 0 4px;
+}
+
+.transfer-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid #eceef3;
+    font-size: 0.88rem;
+}
+
+.transfer-row:last-child {
+    border-bottom: none;
+}
+
+.transfer-name {
+    font-weight: 600;
+    flex: 1 1 140px;
+}
+
+.transfer-reason {
+    color: #8a5a00;
+    font-size: 0.82rem;
+}
+
+.transfer-empty {
+    padding: 10px 0;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+    text-align: center;
+}
+
+.transfer-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: 2px 0 6px;
+}
+
+.transfer-hint i {
+    color: var(--primary-color);
+    margin-right: 4px;
+}
+
+.transfer-error {
+    min-height: 20px;
+    margin-bottom: 12px;
+    color: #dc3545;
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+.transfer-success {
+    margin: 4px 0 8px;
+    color: #1e6b34;
+    font-weight: 600;
+    text-align: center;
+}
+
+.transfer-path {
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    word-break: break-all;
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.transfer-card .modal-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.badge-transfer {
+    background: rgba(74, 144, 226, 0.12);
+    color: #1f4f82;
+}
+
+.badge-transfer i {
+    margin-right: 3px;
+    font-size: 0.7rem;
+}
+
+#log-table tbody tr.log-transfer td:first-child {
+    box-shadow: inset 3px 0 0 var(--secondary-color);
+}

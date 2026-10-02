@@ -10,6 +10,7 @@ mod paths;
 mod printer;
 mod qr;
 mod textfit;
+mod transfer;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::{json, Value};
@@ -373,9 +374,9 @@ fn log_print(state: State<AppState>, control_number: String, side: String, reaso
 
 #[tauri::command]
 fn get_print_history(state: State<AppState>, control_number: String) -> Value {
-    match state.db.print_history(&control_number) {
-        Ok(history) => json!({ "success": true, "history": history }),
-        Err(err) => json!({ "success": false, "error": err.to_string() }),
+    match (state.db.print_history(&control_number), state.db.card_transfers(&control_number)) {
+        (Ok(history), Ok(transfers)) => json!({ "success": true, "history": history, "transfers": transfers }),
+        (Err(err), _) | (_, Err(err)) => json!({ "success": false, "error": err.to_string() }),
     }
 }
 
@@ -411,6 +412,10 @@ fn open_card_folder(state: State<AppState>, control_number: String) -> Value {
     let Some(folder) = folder else {
         return json!({ "success": false, "error": "Card folder not found in the ID folder" });
     };
+    open_in_file_manager(&folder)
+}
+
+fn open_in_file_manager(folder: &Path) -> Value {
     #[cfg(windows)]
     let opener = "explorer";
     #[cfg(target_os = "macos")]
@@ -418,10 +423,186 @@ fn open_card_folder(state: State<AppState>, control_number: String) -> Value {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     let opener = "xdg-open";
     // explorer.exe reports a non-zero exit code even when it opens the folder, so only a failed launch is an error
-    match std::process::Command::new(opener).arg(&folder).spawn() {
+    match std::process::Command::new(opener).arg(folder).spawn() {
         Ok(_) => json!({ "success": true }),
         Err(err) => json!({ "success": false, "error": err.to_string() }),
     }
+}
+
+// ---------- sending unprinted cards to another PC for printing ----------
+
+fn this_pc_name() -> String {
+    std::env::var("COMPUTERNAME").unwrap_or_else(|_| "another PC".into())
+}
+
+#[tauri::command]
+fn get_export_candidates(state: State<AppState>) -> Value {
+    match state.db.export_candidates() {
+        Ok(cards) => json!({ "success": true, "cards": cards }),
+        Err(err) => json!({ "success": false, "error": err.to_string() }),
+    }
+}
+
+// Packs every card this PC has never printed (and never sent before) into one encrypted .ossi file in
+// Documents\OSSI ID Generator\exports, then marks those cards "sent to other PC" so they are not printed here too.
+fn export_cards(state: &AppState, password: &str) -> Result<Value, String> {
+    if password.chars().count() < transfer::MIN_PASSWORD_LEN {
+        return Err(format!("Use a password of at least {} characters", transfer::MIN_PASSWORD_LEN));
+    }
+    let candidates = state.db.export_candidates().map_err(|e| e.to_string())?;
+    let mut cards = Vec::new();
+    let mut skipped = Vec::new();
+    for candidate in &candidates {
+        let control = candidate["controlNumber"].as_str().unwrap_or_default().to_string();
+        let mut files = Vec::new();
+        for (side, name) in [("front", "front-id.svg"), ("back", "back-id.svg")] {
+            if let Some(path) = find_card_file(state, &control, side, name) {
+                let folder = path.parent().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().into_owned());
+                if let (Some(folder), Ok(svg)) = (folder, fs::read_to_string(&path)) {
+                    files.push(transfer::CardFile { folder, name: name.to_string(), svg });
+                }
+            }
+        }
+        if files.is_empty() {
+            // Without the saved SVGs the other PC could not print it, so it stays here
+            skipped.push(json!({ "controlNumber": control, "name": candidate["name"], "reason": "card files not found" }));
+            continue;
+        }
+        cards.push(transfer::Card {
+            records: state.db.card_records(&control).map_err(|e| e.to_string())?,
+            reservations: state.db.card_reservations(&control).map_err(|e| e.to_string())?,
+            control_number: control,
+            files,
+        });
+    }
+    if cards.is_empty() {
+        return Err("There are no unprinted cards to send".into());
+    }
+
+    let package = transfer::Package {
+        format: transfer::FORMAT.into(),
+        version: 1,
+        exported_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        source_pc: this_pc_name(),
+        cards,
+    };
+    let plain = serde_json::to_vec(&package).map_err(|e| e.to_string())?;
+    let encrypted = transfer::encrypt(&plain, password)?;
+
+    fs::create_dir_all(&state.paths.exports_dir).map_err(|e| e.to_string())?;
+    let file_name = format!(
+        "OSSI-print-transfer_{}_{}_{}-cards.ossi",
+        package.source_pc,
+        chrono::Local::now().format("%Y%m%d-%H%M%S"),
+        package.cards.len()
+    );
+    let path = state.paths.exports_dir.join(file_name);
+    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+
+    // Only after the file is safely written: these cards are now the other PC's to print
+    let sent: Vec<String> = package.cards.iter().map(|c| c.control_number.clone()).collect();
+    state.db.mark_sent_out(&sent, "").map_err(|e| e.to_string())?;
+    let names: Vec<Value> = package
+        .cards
+        .iter()
+        .map(|c| {
+            let name = candidates.iter().find(|k| k["controlNumber"] == c.control_number.as_str()).map(|k| k["name"].clone());
+            json!({ "controlNumber": c.control_number, "name": name.unwrap_or(Value::Null) })
+        })
+        .collect();
+    Ok(json!({ "success": true, "path": path.display().to_string(), "sent": names, "skipped": skipped }))
+}
+
+#[tauri::command]
+fn export_for_printing(state: State<AppState>, password: String) -> Value {
+    export_cards(&state, &password).unwrap_or_else(|error| json!({ "success": false, "error": error }))
+}
+
+// Adds the cards from a .ossi file. Never overwrites: a control number already used here is skipped
+// (as "already on this PC" when it is the same person, otherwise reported as a conflict).
+fn import_cards(state: &AppState, data_base64: &str, password: &str) -> Result<Value, String> {
+    let data = BASE64.decode(data_base64.trim()).map_err(|_| "The selected file could not be read".to_string())?;
+    let plain = transfer::decrypt(&data, password)?;
+    let package: transfer::Package =
+        serde_json::from_slice(&plain).map_err(|_| "The transfer file is damaged".to_string())?;
+    if package.format != transfer::FORMAT {
+        return Err("This is not an OSSI print transfer file".into());
+    }
+
+    let mut imported = Vec::new();
+    let mut skipped = Vec::new();
+    for card in &package.cards {
+        let control = card.control_number.trim();
+        let front = card.records.iter().find(|r| r.get("type").and_then(Value::as_str) == Some("front"));
+        let name = front
+            .map(|r| {
+                ["first_name", "middle_initial", "last_name", "suffix"]
+                    .iter()
+                    .filter_map(|k| r.get(*k).and_then(Value::as_str))
+                    .filter(|s| !s.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        if control.is_empty() || card.records.is_empty() {
+            skipped.push(json!({ "controlNumber": control, "name": name, "reason": "incomplete card" }));
+            continue;
+        }
+        if let Some(owner) = state.db.card_owner(control).map_err(|e| e.to_string())? {
+            let incoming = front
+                .map(|r| {
+                    format!(
+                        "{} {}",
+                        r.get("first_name").and_then(Value::as_str).unwrap_or(""),
+                        r.get("last_name").and_then(Value::as_str).unwrap_or("")
+                    )
+                    .trim()
+                    .to_string()
+                })
+                .unwrap_or_default();
+            let reason = if owner.eq_ignore_ascii_case(&incoming) {
+                "already on this PC".to_string()
+            } else {
+                format!("control number already used here by {owner}")
+            };
+            skipped.push(json!({ "controlNumber": control, "name": name, "reason": reason }));
+            continue;
+        }
+        if !card.files.iter().all(transfer::is_safe_card_file) {
+            skipped.push(json!({ "controlNumber": control, "name": name, "reason": "unexpected file in transfer" }));
+            continue;
+        }
+        for file in &card.files {
+            let folder = state.paths.id_output.join(&file.folder);
+            fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+            fs::write(folder.join(&file.name), &file.svg).map_err(|e| e.to_string())?;
+        }
+        state
+            .db
+            .import_card(control, &card.records, &card.reservations, &package.source_pc)
+            .map_err(|e| e.to_string())?;
+        imported.push(json!({ "controlNumber": control, "name": name }));
+    }
+    Ok(json!({
+        "success": true,
+        "sourcePc": package.source_pc,
+        "exportedAt": package.exported_at,
+        "imported": imported,
+        "skipped": skipped,
+    }))
+}
+
+#[tauri::command]
+fn import_print_transfer(state: State<AppState>, data_base64: String, password: String) -> Value {
+    import_cards(&state, &data_base64, &password).unwrap_or_else(|error| json!({ "success": false, "error": error }))
+}
+
+#[tauri::command]
+fn open_exports_folder(state: State<AppState>) -> Value {
+    if let Err(err) = fs::create_dir_all(&state.paths.exports_dir) {
+        return json!({ "success": false, "error": err.to_string() });
+    }
+    open_in_file_manager(&state.paths.exports_dir)
 }
 
 fn main() {
@@ -451,7 +632,11 @@ fn main() {
             log_print,
             get_print_history,
             get_print_summary,
-            get_print_log
+            get_print_log,
+            get_export_candidates,
+            export_for_printing,
+            import_print_transfer,
+            open_exports_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running ID Card Generator");
@@ -491,6 +676,114 @@ mod tests {
             .collect();
         results.push(json!({ "label": "records", "records": state.db.get_all_id_records().unwrap() }));
         fs::write(base.join("results.json"), serde_json::to_string_pretty(&results).unwrap()).unwrap();
+    }
+
+    // Two "PCs" (separate databases and ID folders) using the real templates
+    fn test_pc(name: &str) -> (AppState, std::path::PathBuf) {
+        let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let work = std::env::temp_dir().join(format!("ossi-transfer-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        let paths = Paths::new(project.to_path_buf(), work.clone());
+        fs::create_dir_all(&paths.data_dir).unwrap();
+        (AppState { db: Db::open(&paths.database).unwrap(), paths }, work)
+    }
+
+    // Generates the front and back of a card on `pc` and returns its control number
+    fn make_card(pc: &AppState, first: &str, last: &str) -> String {
+        let front = generate_card(
+            pc,
+            &json!({ "isFront": true, "firstName": first, "lastName": last, "position": "SECURITY GUARD",
+                     "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY" }),
+        )
+        .unwrap();
+        let control = front["controlNumber"].as_str().unwrap().to_string();
+        generate_card(
+            pc,
+            &json!({ "isFront": false, "controlNumber": control, "name": "Maria Cruz", "relationship": "Mother",
+                     "addressLine1": "123 Rizal St", "addressLine2": "Quezon City", "contact": "09171234567",
+                     "surname": last, "firstName": first, "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY" }),
+        )
+        .unwrap();
+        control
+    }
+
+    #[test]
+    fn unprinted_cards_move_to_another_pc_once() {
+        if !std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../VP-SIGNATURE.png").is_file() {
+            return; // the back ID needs the signature, which is not in git
+        }
+        let (pc_a, work_a) = test_pc("a");
+        let (pc_b, work_b) = test_pc("b");
+        let unprinted = make_card(&pc_a, "JUAN", "DELA CRUZ");
+        let printed = make_card(&pc_a, "PEDRO", "SANTOS");
+        pc_a.db.log_print(&printed, "front", "", "SMART-51").unwrap();
+
+        // Only the never-printed card is offered and sent
+        let candidates: Vec<String> = pc_a.db.export_candidates().unwrap().iter()
+            .map(|c| c["controlNumber"].as_str().unwrap().to_string()).collect();
+        assert_eq!(candidates, vec![unprinted.clone()]);
+        assert!(export_cards(&pc_a, "short").unwrap_err().contains("at least 8"));
+        let exported = export_cards(&pc_a, "office-pass-2026").unwrap();
+        assert_eq!(exported["sent"].as_array().unwrap().len(), 1);
+        let file = std::path::PathBuf::from(exported["path"].as_str().unwrap());
+        let bytes = fs::read(&file).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("DELA CRUZ"), "names must not be readable in the file");
+
+        // PC A: the card is now marked as sent, and it cannot be sent again
+        assert!(pc_a.db.export_candidates().unwrap().is_empty());
+        assert_eq!(pc_a.db.card_transfers(&unprinted).unwrap()[0]["direction"], "out");
+        assert!(export_cards(&pc_a, "office-pass-2026").unwrap_err().contains("no unprinted cards"));
+
+        // PC B: wrong password gets nothing; the right one adds the card with its files
+        let data = BASE64.encode(&bytes);
+        assert_eq!(import_cards(&pc_b, &data, "wrong-password").unwrap_err(), "Wrong password, or the file is damaged");
+        assert!(pc_b.db.card_owner(&unprinted).unwrap().is_none());
+        let imported = import_cards(&pc_b, &data, "office-pass-2026").unwrap();
+        assert_eq!(imported["imported"][0]["controlNumber"], unprinted.as_str());
+        assert_eq!(imported["imported"][0]["name"], "JUAN DELA CRUZ");
+        assert!(find_card_file(&pc_b, &unprinted, "front", "front-id.svg").is_some());
+        assert!(find_card_file(&pc_b, &unprinted, "back", "back-id.svg").is_some());
+        assert_eq!(pc_b.db.card_records(&unprinted).unwrap().len(), 2);
+        assert_eq!(pc_b.db.card_transfers(&unprinted).unwrap()[0]["direction"], "in");
+        // ...and B never re-issues that control number
+        assert_eq!(pc_b.db.card_reservations(&unprinted).unwrap().len(), 1);
+
+        // Importing the same file again adds nothing
+        let again = import_cards(&pc_b, &data, "office-pass-2026").unwrap();
+        assert!(again["imported"].as_array().unwrap().is_empty());
+        assert_eq!(again["skipped"][0]["reason"], "already on this PC");
+
+        // A received card is never sent onward from B
+        assert!(pc_b.db.export_candidates().unwrap().is_empty());
+
+        // close the databases first: Windows cannot delete a file that is still open
+        drop((pc_a, pc_b));
+        let _ = fs::remove_dir_all(work_a);
+        let _ = fs::remove_dir_all(work_b);
+    }
+
+    #[test]
+    fn import_never_overwrites_a_different_card_with_the_same_number() {
+        if !std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../VP-SIGNATURE.png").is_file() {
+            return;
+        }
+        let (pc_a, work_a) = test_pc("conflict-a");
+        let (pc_b, work_b) = test_pc("conflict-b");
+        let control = make_card(&pc_a, "JUAN", "DELA CRUZ");
+        let exported = export_cards(&pc_a, "office-pass-2026").unwrap();
+        // PC B already has someone else under that number
+        pc_b.db
+            .save_id_record("front", &IdRecord { first_name: "ANA", last_name: "REYES", control_number: &control, ..Default::default() })
+            .unwrap();
+        let data = BASE64.encode(fs::read(exported["path"].as_str().unwrap()).unwrap());
+        let result = import_cards(&pc_b, &data, "office-pass-2026").unwrap();
+        assert!(result["imported"].as_array().unwrap().is_empty());
+        assert_eq!(result["skipped"][0]["reason"], "control number already used here by ANA REYES");
+        assert_eq!(pc_b.db.card_owner(&control).unwrap().as_deref(), Some("ANA REYES"));
+        // close the databases first: Windows cannot delete a file that is still open
+        drop((pc_a, pc_b));
+        let _ = fs::remove_dir_all(work_a);
+        let _ = fs::remove_dir_all(work_b);
     }
 
     #[test]

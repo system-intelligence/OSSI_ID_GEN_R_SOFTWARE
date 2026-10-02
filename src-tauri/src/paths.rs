@@ -46,6 +46,8 @@ pub struct Paths {
     pub front_template: PathBuf,
     pub back_template: PathBuf,
     pub id_output: PathBuf,
+    // .ossi files made by "Send to other PC"
+    pub exports_dir: PathBuf,
     // VP-SIGNATURE.png: a copy in the working folder wins, so the signature can be replaced without
     // reinstalling; otherwise the one bundled with the installer (next to the templates) is used
     pub authorized_signature: PathBuf,
@@ -68,6 +70,7 @@ impl Paths {
             front_template: resources.join("templates").join("front-id.svg"),
             back_template: resources.join("templates").join("back-id.svg"),
             id_output: work.join("ID"),
+            exports_dir: work.join("exports"),
             authorized_signature: work.join("VP-SIGNATURE.png"),
             bundled_signature: resources.join("VP-SIGNATURE.png"),
         }

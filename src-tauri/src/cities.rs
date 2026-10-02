@@ -150,3 +150,27 @@ pub const CITIES: &[(&str, &str)] = &[
     ("VIGAN CITY", "VIG"),
     ("ZAMBOANGA CITY", "ZAM"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::CITIES;
+    use std::collections::HashSet;
+
+    // 149 cities as of 2026 (newest: Carmona, Cavite - July 8, 2023). Update this when a new city is created.
+    #[test]
+    fn every_philippine_city_is_listed_once() {
+        assert_eq!(CITIES.len(), 149);
+        let names: HashSet<&str> = CITIES.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names.len(), CITIES.len(), "a city name is listed twice");
+    }
+
+    // Control numbers rely on these: exactly 3 letters A-Z, no digits, and no two cities sharing a code
+    #[test]
+    fn city_codes_are_three_unique_letters() {
+        for (name, code) in CITIES {
+            assert!(code.len() == 3 && code.chars().all(|c| c.is_ascii_uppercase()), "{name}: bad code {code:?}");
+        }
+        let codes: HashSet<&str> = CITIES.iter().map(|(_, code)| *code).collect();
+        assert_eq!(codes.len(), CITIES.len(), "two cities share a code");
+    }
+}

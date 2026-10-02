@@ -1,6 +1,6 @@
 [package]
 name = "ossi-id-generator"
-version = "1.0.0"
+version = "1.1.0"
 description = "ID Card Generator (Tauri/Rust version)"
 authors = ["ID Card Team"]
 edition = "2021"
@@ -25,6 +25,10 @@ qrcode = { version = "0.14", default-features = false }
 # Measures centred card text with the installed fonts (same shaping as Chrome/WebView2) so it can be
 # written left-anchored, which CorelDRAW imports exactly
 rustybuzz = "0.20"
+# Password-encrypted "send to other PC" files: Argon2id turns the password into a key, AES-256-GCM encrypts
+argon2 = "0.5"
+aes-gcm = "0.10"
+getrandom = "0.2"
 
 [profile.release]
 codegen-units = 1

@@ -48,7 +48,7 @@ cargo tauri build
 ```
 
 `VP-SIGNATURE.png` must be in the project root when building: it is bundled into the installer.
-The installer is written to `src-tauri/target/release/bundle/nsis/OSSI ID Card Generator_1.0.0_x64-setup.exe`.
+The installer is written to `src-tauri/target/release/bundle/nsis/OSSI ID Card Generator_<version>_x64-setup.exe`.
 Copy that one file to the other PC and run it. It installs for the current Windows user (no administrator rights needed)
 and adds a Start menu shortcut. The card templates and the signature are included in the installer,
 so keep the setup file within the office - anyone with a copy can extract the signature from it.
@@ -63,3 +63,16 @@ On an installed PC the app keeps its working files in **`Documents\OSSI ID Gener
 
 These files survive updates and uninstalling. To move existing records to that PC, copy the `data\` folder
 (and `ID\` for the saved cards) into `Documents\OSSI ID Generator\` before starting the app.
+
+## Printing on another PC (Send / Receive)
+
+To print cards made on PC A with the ID printer on PC B, without printing any card twice:
+
+1. **PC A: Records → Send to other PC.** Only cards PC A has never printed are included. Choose a password
+   (8+ characters); the encrypted file is saved in `Documents\OSSI ID Generator\exports\`. Those cards are then
+   marked **"Sent to other PC"** on PC A, and printing them there asks for a reprint reason first.
+2. Copy the `.ossi` file to PC B (USB or shared folder). Give the password separately - never on the same USB.
+3. **PC B: Records → Receive**, pick the file and enter the password. Cards are only added: nothing on PC B is
+   overwritten, and a card PC B already has is skipped. PC B then prints them like its own cards.
+
+Without the password the file cannot be read (Argon2id key + AES-256-GCM). Delete it from the USB once imported.
