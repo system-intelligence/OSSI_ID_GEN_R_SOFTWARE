@@ -151,11 +151,13 @@
                                     </div>
                                     <select id="position" class="hidden-select">
                                         <option value="SECURITY GUARD">SECURITY GUARD</option>
+                                        <option value="SECURITY OFFICER">SECURITY OFFICER</option>
                                         <option value="INFORMATION TECHNOLOGY">INFORMATION TECHNOLOGY</option>
                                         <option value="OTHERS">OTHERS</option>
                                     </select>
                                     <div class="select-options">
                                         <div class="option" data-value="SECURITY GUARD">SECURITY GUARD</div>
+                                        <div class="option" data-value="SECURITY OFFICER">SECURITY OFFICER</div>
                                         <div class="option" data-value="INFORMATION TECHNOLOGY">INFORMATION TECHNOLOGY</div>
                                         <div class="option" data-value="OTHERS">OTHERS</div>
                                     </div>
@@ -356,6 +358,12 @@
                                 <p>Click a column header to sort</p>
                             </div>
                             <div class="transfer-actions">
+                                <span class="tip-wrap" id="scanTip">
+                                    <!-- locked until camera detection (renderer.js) confirms a camera -->
+                                    <button id="scanQrBtn" class="transfer-btn" title="Scan the QR code on an ID card with the camera to open its record" disabled>
+                                        <i class="fas fa-lock"></i> Scan QR
+                                    </button>
+                                </span>
                                 <button id="sendToPcBtn" class="transfer-btn" title="Send cards this PC has not printed yet to another PC, for printing there">
                                     <i class="fas fa-file-export"></i> Send to other PC
                                 </button>
@@ -580,11 +588,14 @@
                 <span id="printWarningText"></span>
             </div>
             <div class="preview-footer">
-                <span class="preview-note"><i class="fas fa-info-circle"></i> Showing the saved SVG files. Fonts may look slightly different in CorelDRAW.</span>
+                <span class="preview-note"><i class="fas fa-info-circle"></i> Showing the saved SVG files.</span>
                 <div class="preview-actions">
-                    <button class="modal-btn modal-btn-cancel" id="previewEditBtn" title="Correct a misspelling or update details - the control number stays the same">
-                        <i class="fas fa-pen"></i> Edit
-                    </button>
+                    <!-- The wrapper shows the tooltip: a disabled button itself does not react to the mouse -->
+                    <span class="tip-wrap" id="previewEditTip">
+                        <button class="modal-btn modal-btn-cancel" id="previewEditBtn" title="Correct a misspelling or update details - the control number stays the same">
+                            <i class="fas fa-pen"></i> Edit
+                        </button>
+                    </span>
                     <button class="modal-btn modal-btn-cancel" id="previewFolderBtn">
                         <i class="fas fa-folder-open"></i> Open Folder
                     </button>
@@ -642,6 +653,28 @@
         </div>
     </div>
 
+    <!-- Scan an ID card's QR code with the camera (only offered when a camera is connected) -->
+    <div id="scanModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card scan-card" role="dialog" aria-modal="true" aria-labelledby="scanTitle">
+            <div class="scan-header">
+                <div class="modal-title" id="scanTitle"><i class="fas fa-qrcode"></i> Scan ID card</div>
+                <button class="preview-close" id="scanCloseBtn" aria-label="Close scanner"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="scan-video-box">
+                <video id="scanVideo" playsinline muted></video>
+                <div class="scan-frame" aria-hidden="true"></div>
+            </div>
+            <div class="scan-status" id="scanStatus" role="status">Starting camera...</div>
+            <div class="scan-manual">
+                <input type="text" id="scanManual" class="transfer-input" placeholder="Or type / use a USB scanner: control number, then Enter" autocomplete="off">
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn modal-btn-cancel" id="scanRetryBtn" hidden><i class="fas fa-redo"></i> Scan again</button>
+                <button class="modal-btn modal-btn-cancel" id="scanDoneBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Correct a saved card: same control number, every change is logged -->
     <div id="editModal" class="modal-overlay edit-overlay" style="display: none;">
         <div class="preview-card edit-card" role="dialog" aria-modal="true" aria-labelledby="editTitle">
@@ -662,8 +695,12 @@
                         <div class="field"><label for="edit-lastName">Last Name</label><input type="text" id="edit-lastName" class="edit-upper"></div>
                         <div class="field"><label for="edit-firstName">First Name</label><input type="text" id="edit-firstName" class="edit-upper"></div>
                         <div class="field"><label for="edit-middleInitial">Middle Initial</label><input type="text" id="edit-middleInitial" class="edit-upper" maxlength="3"></div>
-                        <div class="field"><label for="edit-suffix">Suffix</label><select id="edit-suffix" class="edit-select"></select></div>
-                        <div class="field span-2"><label for="edit-position">Position</label><input type="text" id="edit-position" class="edit-upper" list="edit-position-options"><datalist id="edit-position-options"></datalist></div>
+                        <div class="field"><label for="edit-suffix">Suffix</label><div class="edit-chevron"><select id="edit-suffix" class="edit-select"></select></div></div>
+                        <div class="field span-2">
+                            <label for="edit-position">Position</label>
+                            <div class="edit-chevron"><select id="edit-position" class="edit-select"></select></div>
+                            <input type="text" id="edit-position-other" class="edit-upper edit-position-other" placeholder="Please specify position" hidden>
+                        </div>
                     </div>
                     <div class="edit-images">
                         <div class="edit-image">
@@ -683,7 +720,7 @@
                     <div class="edit-section-title"><span class="card-chip back">Back</span> Emergency Contact</div>
                     <div class="edit-grid">
                         <div class="field span-2"><label for="edit-emergencyName">Full Name</label><input type="text" id="edit-emergencyName"></div>
-                        <div class="field"><label for="edit-relationship">Relationship</label><select id="edit-relationship" class="edit-select"></select></div>
+                        <div class="field"><label for="edit-relationship">Relationship</label><div class="edit-chevron"><select id="edit-relationship" class="edit-select"></select></div></div>
                         <div class="field"><label for="edit-contact">Contact Number</label><input type="text" id="edit-contact" inputmode="tel"></div>
                         <div class="field"><label for="edit-address1">Address Line 1</label><input type="text" id="edit-address1" maxlength="29"><span class="field-hint">Max 29 characters</span></div>
                         <div class="field"><label for="edit-address2">Address Line 2</label><input type="text" id="edit-address2" maxlength="29"><span class="field-hint">Max 29 characters</span></div>
@@ -772,6 +809,8 @@
     <!-- Only this is printed: one card side at exact CR80 size (see @media print in styles.css) -->
     <div id="print-area" aria-hidden="true"></div>
 
+    <!-- jsQR 1.4.0 (Apache-2.0), bundled so QR scanning works offline -->
+    <script src="../vendor/jsqr/jsQR.js"></script>
     <script src="./phone.js"></script>
     <script src="./renderer.js"></script>
 </body>

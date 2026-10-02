@@ -64,6 +64,17 @@ On an installed PC the app keeps its working files in **`Documents\OSSI ID Gener
 These files survive updates and uninstalling. To move existing records to that PC, copy the `data\` folder
 (and `ID\` for the saved cards) into `Documents\OSSI ID Generator\` before starting the app.
 
+## Scanning an ID card's QR code
+
+The QR on the back of each ID holds its control number. **Records → Scan QR** opens the camera, reads the QR
+and opens that card (preview, history, Edit, Print).
+
+- The button is only usable when a camera is connected; otherwise it is locked with a "No camera found" tooltip.
+  Plugging a webcam in unlocks it without restarting. The first scan may ask to allow the camera.
+- A USB QR scanner works without a camera: scan into the Records or Print Log search box, or the box in the
+  Scan window.
+- The QR reader (jsQR, Apache-2.0) is bundled in `ui/vendor/jsqr/`, so scanning works offline.
+
 ## Correcting a card (Edit)
 
 **Records → View → Edit** fixes a misspelling or updates details without making a new card:

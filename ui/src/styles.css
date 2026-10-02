@@ -2688,3 +2688,214 @@ input[type="text"]:focus {
         grid-template-columns: 1fr;
     }
 }
+
+/* Edit pop-up dropdowns: the app's own chevron (icons/chevron.png, same size and faintness as .chevron)
+   instead of the browser's built-in arrows */
+.edit-chevron {
+    position: relative;
+}
+
+.edit-chevron::after {
+    content: "";
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    transform: translateY(-50%);
+    background: url("../icons/chevron.png") center / contain no-repeat;
+    opacity: 0.6;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.edit-chevron:focus-within::after {
+    opacity: 1;
+}
+
+.edit-chevron select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 40px;
+    cursor: pointer;
+}
+
+.edit-chevron input[type="text"] {
+    padding-right: 40px;
+}
+
+/* Position suggestions: the native arrow is invisible but still clickable, right under our chevron */
+.edit-chevron input::-webkit-calendar-picker-indicator {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 44px;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.edit-position-other {
+    margin-top: 8px;
+}
+
+/* Edit pop-up dropdowns are the same custom dropdown as the forms (rotating chevron); the open list
+   floats over the fields below it */
+.edit-custom .select-options {
+    z-index: 20;
+}
+
+/* Tooltip on a locked (disabled) button: shown by its wrapper, since a disabled button ignores the mouse */
+.tip-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.tip-wrap.has-tip {
+    cursor: not-allowed;
+}
+
+.tip-wrap.has-tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 10px);
+    right: 0;
+    z-index: 10;
+    width: max-content;
+    max-width: 360px;
+    padding: 8px 11px;
+    border-radius: 6px;
+    background: #1f2430;
+    color: white;
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1.45;
+    text-align: left;
+    /* a line break in data-tip starts a new line (e.g. the main message, then a hint) */
+    white-space: pre-line;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.25);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+    pointer-events: none;
+}
+
+/* small arrow pointing at the button */
+.tip-wrap.has-tip::before {
+    content: "";
+    position: absolute;
+    bottom: calc(100% + 4px);
+    right: 22px;
+    z-index: 10;
+    border: 6px solid transparent;
+    border-bottom: 0;
+    border-top-color: #1f2430;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, visibility 0.15s;
+    pointer-events: none;
+}
+
+.tip-wrap.has-tip:hover::after,
+.tip-wrap.has-tip:hover::before {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+}
+
+/* the disabled button must not swallow the hover */
+.tip-wrap.has-tip button:disabled {
+    pointer-events: none;
+}
+
+/* ---------- QR scanner ---------- */
+
+.scan-card {
+    max-width: 520px;
+    text-align: left;
+}
+
+.scan-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.scan-header .modal-title {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.scan-video-box {
+    position: relative;
+    aspect-ratio: 4 / 3;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: #111827;
+}
+
+.scan-video-box video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* square guide where the QR should go */
+.scan-frame {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 55%;
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    border-radius: 12px;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+    outline: 3px solid rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+}
+
+.scan-status {
+    margin: 12px 0 10px;
+    min-height: 22px;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.scan-status.warn {
+    color: #8a5a00;
+}
+
+.scan-status.error {
+    color: #dc3545;
+    font-weight: 600;
+}
+
+.scan-manual {
+    margin-bottom: 14px;
+}
+
+#scanQrBtn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* the Scan tooltip sits in the Records header: open it downwards so it is not cut off */
+#scanTip.has-tip::after {
+    bottom: auto;
+    top: calc(100% + 10px);
+}
+
+#scanTip.has-tip::before {
+    bottom: auto;
+    top: calc(100% + 4px);
+    border-top: 0;
+    border-bottom: 6px solid #1f2430;
+}

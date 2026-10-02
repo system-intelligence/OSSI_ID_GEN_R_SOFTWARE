@@ -603,6 +603,18 @@ fn import_print_transfer(state: State<AppState>, data_base64: String, password: 
     import_cards(&state, &data_base64, &password).unwrap_or_else(|error| json!({ "success": false, "error": error }))
 }
 
+// ---------- QR scan: does this control number belong to a card on this PC? ----------
+
+#[tauri::command]
+fn find_card(state: State<AppState>, control_number: String) -> Value {
+    let control = control_number.trim().to_uppercase();
+    match state.db.card_owner(&control) {
+        Ok(Some(name)) => json!({ "found": true, "controlNumber": control, "name": name }),
+        Ok(None) => json!({ "found": false, "controlNumber": control }),
+        Err(err) => json!({ "found": false, "controlNumber": control, "error": err.to_string() }),
+    }
+}
+
 // ---------- correcting a saved card (see edit.rs) ----------
 
 #[tauri::command]
@@ -659,7 +671,8 @@ fn main() {
             import_print_transfer,
             open_exports_folder,
             get_card_for_edit,
-            update_card
+            update_card,
+            find_card
         ])
         .run(tauri::generate_context!())
         .expect("error while running ID Card Generator");

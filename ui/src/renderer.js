@@ -26,6 +26,7 @@ const ipcRenderer = {
             case 'open-exports-folder': return invoke('open_exports_folder');
             case 'get-card-for-edit': return invoke('get_card_for_edit', { controlNumber: args[0] });
             case 'update-card': return invoke('update_card', { controlNumber: args[0], changes: args[1] });
+            case 'find-card': return invoke('find_card', { controlNumber: args[0] });
             default: return Promise.reject(new Error(`Unknown channel: ${channel}`));
         }
     }
@@ -458,7 +459,8 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             document.querySelectorAll('select').forEach(select => select.value = '');
             positionSelect.value = 'SECURITY GUARD';
-            document.querySelectorAll('.select-wrapper').forEach(wrapper => {
+            // Only the form's own dropdowns (the edit pop-up has its own, outside .container)
+            document.querySelectorAll('.container .select-wrapper').forEach(wrapper => {
                 const select = wrapper.querySelector('select');
                 wrapper.querySelector('.select-text').textContent = select.options[select.selectedIndex].textContent.trim();
             });
@@ -1739,6 +1741,19 @@ function showPrintWarning(warning) {
     document.getElementById('printWarning').hidden = !warning;
 }
 
+// Edit is locked for a card sent to another PC: lock icon + a tooltip on hover explaining why
+function setEditLocked(locked) {
+    const btn = document.getElementById('previewEditBtn');
+    const tip = document.getElementById('previewEditTip');
+    btn.disabled = locked;
+    btn.innerHTML = locked ? '<i class="fas fa-lock"></i> Edit' : '<i class="fas fa-pen"></i> Edit';
+    btn.title = locked ? '' : 'Correct a misspelling or update details - the control number stays the same';
+    tip.classList.toggle('has-tip', locked);
+    tip.dataset.tip = locked
+        ? 'Editing is locked: this card was sent to another PC for printing. Correct it on that PC.'
+        : '';
+}
+
 // Print history of the card shown in the preview, newest first
 async function loadPrintHistory(controlNumber) {
     const list = document.getElementById('printHistoryList');
@@ -1748,10 +1763,7 @@ async function loadPrintHistory(controlNumber) {
         if (previewControlNumber !== controlNumber) return;
         const history = result.history || [];
         const sentOut = (result.transfers || []).some(t => t.direction === 'out');
-        previewEditBtn.disabled = sentOut;
-        previewEditBtn.title = sentOut
-            ? 'This card was sent to another PC for printing - correct it on that PC'
-            : 'Correct a misspelling or update details - the control number stays the same';
+        setEditLocked(sentOut);
         const edits = (result.edits || []).map(e => `
             <li>
                 <span class="badge badge-edit"><i class="fas fa-pen"></i> Edited</span>
@@ -1796,6 +1808,149 @@ printBackBtn.addEventListener('click', () => {
     if (previewCards.back) printFromPreview([{ side: 'back', svg: previewCards.back }]);
 });
 
+// ---------- Scan an ID card's QR code (camera) ----------
+// The QR on the back holds the control number, e.g. 260921ANG-5518-RH. The Scan button is only usable when
+// a camera is connected; it is re-checked whenever a device is plugged in or removed.
+
+const scanBtn = document.getElementById('scanQrBtn');
+const scanTip = document.getElementById('scanTip');
+const scanModal = document.getElementById('scanModal');
+const scanVideo = document.getElementById('scanVideo');
+const scanStatusBox = document.getElementById('scanStatus');
+const scanManual = document.getElementById('scanManual');
+const scanRetryBtn = document.getElementById('scanRetryBtn');
+const scanCanvas = document.createElement('canvas');
+const CONTROL_NUMBER_PATTERN = /^\d{6}[A-Z]{3}-\d{4}(-RH)?$/;
+let scanStream = null;
+let scanTimer = null;
+let scanBusy = false;
+
+function setScanAvailable(available) {
+    scanBtn.disabled = !available;
+    scanBtn.innerHTML = available ? '<i class="fas fa-qrcode"></i> Scan QR' : '<i class="fas fa-lock"></i> Scan QR';
+    scanTip.classList.toggle('has-tip', !available);
+    scanTip.dataset.tip = available ? '' : 'No camera found – connect a webcam to scan ID cards.\nA USB QR scanner still works in the search box.';
+}
+
+async function detectCamera() {
+    let available = false;
+    try {
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            available = devices.some(d => d.kind === 'videoinput');
+        }
+    } catch (err) {
+        console.warn('Could not list cameras:', err);
+    }
+    setScanAvailable(available && typeof window.jsQR === 'function');
+}
+
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', detectCamera);
+}
+detectCamera();
+
+function setScanStatus(text, kind) {
+    scanStatusBox.textContent = text;
+    scanStatusBox.className = 'scan-status' + (kind ? ' ' + kind : '');
+}
+
+function stopCamera() {
+    clearInterval(scanTimer);
+    scanTimer = null;
+    if (scanStream) scanStream.getTracks().forEach(track => track.stop()); // turns the camera light off
+    scanStream = null;
+    scanVideo.srcObject = null;
+}
+
+// Reads one frame; a smaller copy is enough for jsQR and much faster
+function readFrame() {
+    if (scanBusy || scanVideo.readyState < 2 || !scanVideo.videoWidth) return;
+    const scale = Math.min(1, 800 / scanVideo.videoWidth);
+    const w = Math.round(scanVideo.videoWidth * scale);
+    const h = Math.round(scanVideo.videoHeight * scale);
+    scanCanvas.width = w;
+    scanCanvas.height = h;
+    const ctx = scanCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(scanVideo, 0, 0, w, h);
+    const code = window.jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'dontInvert' });
+    if (code && code.data) handleScanned(code.data);
+}
+
+async function startCamera() {
+    stopCamera();
+    scanRetryBtn.hidden = true;
+    setScanStatus('Starting camera...');
+    try {
+        scanStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false
+        });
+        if (scanModal.style.display === 'none') { stopCamera(); return; } // closed while starting
+        scanVideo.srcObject = scanStream;
+        await scanVideo.play();
+        setScanStatus('Hold the QR code on the back of the ID card inside the frame.');
+        scanTimer = setInterval(readFrame, 200);
+    } catch (err) {
+        stopCamera();
+        const name = err && err.name;
+        setScanStatus(name === 'NotAllowedError'
+            ? 'Camera access was blocked. Allow the camera for this app, then try again.'
+            : name === 'NotFoundError' || name === 'OverconstrainedError'
+                ? 'No camera found. Connect a webcam, or type the control number below.'
+                : name === 'NotReadableError'
+                    ? 'The camera is being used by another program. Close it, then try again.'
+                    : `Could not start the camera: ${err.message || err}`, 'error');
+        scanRetryBtn.hidden = false;
+        detectCamera();
+    }
+}
+
+async function handleScanned(raw) {
+    const text = String(raw).trim().toUpperCase();
+    if (!CONTROL_NUMBER_PATTERN.test(text)) {
+        setScanStatus(`That QR code is not an OSSI ID card ("${text.slice(0, 40)}").`, 'warn');
+        return; // keep scanning
+    }
+    scanBusy = true;
+    try {
+        const result = await ipcRenderer.invoke('find-card', text);
+        if (result.found) {
+            closeScanner();
+            await openCardPreview(result.controlNumber, result.name);
+        } else {
+            stopCamera();
+            setScanStatus(`Card ${text} is not in the records on this PC.`, 'error');
+            scanRetryBtn.hidden = false;
+        }
+    } catch (err) {
+        setScanStatus(`Could not look up the card: ${err.message || err}`, 'error');
+    } finally {
+        scanBusy = false;
+    }
+}
+
+function openScanner() {
+    scanManual.value = '';
+    scanModal.style.display = 'flex';
+    startCamera();
+}
+
+function closeScanner() {
+    stopCamera();
+    scanModal.style.display = 'none';
+}
+
+scanBtn.addEventListener('click', openScanner);
+scanRetryBtn.addEventListener('click', startCamera);
+document.getElementById('scanDoneBtn').addEventListener('click', closeScanner);
+document.getElementById('scanCloseBtn').addEventListener('click', closeScanner);
+scanModal.addEventListener('click', e => { if (e.target === scanModal) closeScanner(); });
+scanModal.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closeScanner(); } });
+scanManual.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && scanManual.value.trim()) handleScanned(scanManual.value);
+});
+
 // ---------- Edit a saved card (same control number, every change logged) ----------
 
 const previewEditBtn = document.getElementById('previewEditBtn');
@@ -1809,7 +1964,69 @@ function fillSelect(select, options, current) {
     if (current && !values.some(o => o.value === current)) values.push({ value: current, label: current });
     select.innerHTML = values.map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
     select.value = current || '';
+    if (select.refreshCustom) select.refreshCustom();
 }
+
+// Turns a plain <select> into the app's custom dropdown (same look and rotating chevron as the Front/Back
+// forms). The <select> stays as the hidden value holder, so .value and 'change' work as before.
+function makeCustomSelect(select) {
+    const wrapper = select.closest('.edit-chevron');
+    wrapper.className = 'select-wrapper edit-custom';
+    select.classList.add('hidden-select');
+    const trigger = document.createElement('div');
+    trigger.className = 'select-trigger';
+    trigger.tabIndex = 0;
+    trigger.innerHTML = '<span class="select-text"></span><img src="../icons/chevron.png" class="chevron" alt="">';
+    const panel = document.createElement('div');
+    panel.className = 'select-options';
+    wrapper.insertBefore(trigger, select);
+    wrapper.appendChild(panel);
+    const chevron = trigger.querySelector('.chevron');
+
+    const close = () => { wrapper.classList.remove('open'); chevron.classList.remove('rotate'); };
+    select.refreshCustom = () => {
+        const options = [...select.options];
+        panel.innerHTML = options.map(o =>
+            `<div class="option${o.value === select.value ? ' selected' : ''}" data-value="${escapeHtml(o.value)}">${escapeHtml(o.textContent)}</div>`).join('');
+        const chosen = options[select.selectedIndex];
+        trigger.querySelector('.select-text').textContent = chosen ? chosen.textContent : '';
+        // grey only when nothing is chosen (e.g. Suffix "None"), like the forms' dropdowns
+        trigger.classList.toggle('is-placeholder', select.value === '');
+    };
+    select.closeCustom = close;
+
+    trigger.addEventListener('click', e => {
+        e.stopPropagation();
+        const opening = !wrapper.classList.contains('open');
+        document.querySelectorAll('#editModal .select-wrapper.open').forEach(w => w.querySelector('select').closeCustom());
+        if (opening) { wrapper.classList.add('open'); chevron.classList.add('rotate'); }
+    });
+    panel.addEventListener('click', e => {
+        const option = e.target.closest('.option');
+        if (!option) return;
+        e.stopPropagation();
+        select.value = option.dataset.value;
+        select.refreshCustom();
+        close();
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        trigger.focus();
+    });
+    document.addEventListener('click', close);
+    select.refreshCustom();
+}
+
+['edit-suffix', 'edit-position', 'edit-relationship'].forEach(id => makeCustomSelect(document.getElementById(id)));
+
+// "Please specify" box under Position, only when OTHERS is chosen
+function syncEditPositionOther() {
+    const other = document.getElementById('edit-position-other');
+    other.hidden = document.getElementById('edit-position').value !== 'OTHERS';
+}
+
+document.getElementById('edit-position').addEventListener('change', () => {
+    syncEditPositionOther();
+    if (!document.getElementById('edit-position-other').hidden) document.getElementById('edit-position-other').focus();
+});
 
 function setEditImage(img, dataUrl) {
     img.src = dataUrl || '';
@@ -1834,14 +2051,19 @@ async function openEditModal() {
             <span class="edit-locked-item"><i class="fas fa-lock"></i> City of birth <strong>${escapeHtml(card.locked.cityOfBirth)}</strong></span>
             ${card.locked.isRehire ? '<span class="badge badge-rehire">Rehire</span>' : ''}
             <span class="edit-locked-note">Locked because they make up the control number. If one is wrong, make a new card.</span>`;
-        for (const key of ['lastName', 'firstName', 'middleInitial', 'position']) {
+        for (const key of ['lastName', 'firstName', 'middleInitial']) {
             document.getElementById('edit-' + key).value = card.front[key] || '';
         }
         fillSelect(document.getElementById('edit-suffix'),
             [...document.querySelectorAll('#suffix option')].map(o => ({ value: o.value.trim(), label: o.textContent.trim() })),
             card.front.suffix);
-        document.getElementById('edit-position-options').innerHTML = [...document.querySelectorAll('#position option')]
-            .filter(o => o.value !== 'OTHERS').map(o => `<option value="${escapeHtml(o.value)}">`).join('');
+        // Same positions as the Front ID form; a custom one shows as OTHERS + its text, like on that form
+        const positions = [...document.querySelectorAll('#position option')].map(o => ({ value: o.value, label: o.textContent.trim() }));
+        const current = (card.front.position || '').toUpperCase();
+        const listed = positions.some(p => p.value === current && p.value !== 'OTHERS');
+        fillSelect(document.getElementById('edit-position'), positions, listed ? current : 'OTHERS');
+        document.getElementById('edit-position-other').value = listed ? '' : current;
+        syncEditPositionOther();
         setEditImage(document.getElementById('edit-photo'), card.idPicture);
         setEditImage(document.getElementById('edit-signature'), card.signaturePicture);
 
@@ -1905,9 +2127,14 @@ editSaveBtn.addEventListener('click', async () => {
         firstName: value('edit-firstName'),
         middleInitial: value('edit-middleInitial'),
         suffix: value('edit-suffix'),
-        position: value('edit-position'),
+        position: value('edit-position') === 'OTHERS' ? value('edit-position-other').trim() : value('edit-position'),
         ...replacedImages
     };
+    if (!changes.position) {
+        document.getElementById('editError').textContent = 'Please specify the position.';
+        document.getElementById('edit-position-other').focus();
+        return;
+    }
     if (editingCard.back) {
         Object.assign(changes, {
             emergencyName: value('edit-emergencyName'),
@@ -1952,7 +2179,12 @@ previewEditBtn.addEventListener('click', openEditModal);
 document.getElementById('editCancelBtn').addEventListener('click', closeEditModal);
 document.getElementById('editCloseBtn').addEventListener('click', closeEditModal);
 editModal.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.stopPropagation(); closeEditModal(); }
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    // Esc closes an open dropdown first, and only then the editor
+    const open = editModal.querySelector('.select-wrapper.open select');
+    if (open) open.closeCustom();
+    else closeEditModal();
 });
 
 function closeCardPreview() {
