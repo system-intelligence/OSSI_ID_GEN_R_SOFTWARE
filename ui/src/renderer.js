@@ -7,8 +7,8 @@ const ipcRenderer = {
             case 'check-pin-setup': return invoke('check_pin_setup');
             case 'setup-pin': return invoke('setup_pin', { pin: args[0] });
             case 'verify-pin': return invoke('verify_pin', { pin: args[0] });
-            case 'get-cities': return invoke('get_cities');
-            case 'get-city-code': return invoke('get_city_code', { cityName: args[0] ?? null });
+            case 'get-cities': return invoke('get_provinces'); // place of birth: provinces (see provinces.rs)
+            case 'get-city-code': return invoke('get_place_code', { placeName: args[0] ?? null });
             case 'generate-control-number': return invoke('generate_control_number', { prefix: args[0], isRehire: !!args[1] });
             case 'get-all-records': return invoke('get_all_records');
             case 'reset-database': return invoke('reset_database');
@@ -360,7 +360,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Searchable dropdowns (City of Birth): type to filter, arrow keys to move, Enter to pick, Esc to close
+    // Searchable dropdowns (Province of Birth): type to filter, arrow keys to move, Enter to pick, Esc to close
     document.querySelectorAll('.select-options.searchable').forEach(panel => {
         const wrapper = panel.closest('.select-wrapper');
         const trigger = wrapper.querySelector('.select-trigger');
@@ -378,7 +378,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
-        // While searching, the "Select city" placeholder row is hidden and the first match is highlighted
+        // While searching, the "Select province" placeholder row is hidden and the first match is highlighted
         function filter() {
             const query = input.value.trim().toLowerCase();
             let count = 0;
@@ -496,8 +496,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const cities = await ipcRenderer.invoke('get-cities');
             const container = document.getElementById('city-options');
             const select = document.getElementById('city-select');
-            container.innerHTML = '<div class="option" data-value="">Select city</div>';
-            select.innerHTML = '<option value="">Select city</option>';
+            container.innerHTML = '<div class="option" data-value="">Select province</div>';
+            select.innerHTML = '<option value="">Select province</option>';
             cities.forEach(c => {
                 const div = document.createElement('div');
                 div.className = 'option';
@@ -2048,7 +2048,7 @@ async function openEditModal() {
         document.getElementById('editLocked').innerHTML = `
             <span class="edit-locked-item"><i class="fas fa-lock"></i> Control No. <span class="control-chip">${escapeHtml(card.controlNumber)}</span></span>
             <span class="edit-locked-item"><i class="fas fa-lock"></i> Hire date <strong>${escapeHtml(card.locked.hireDate)}</strong></span>
-            <span class="edit-locked-item"><i class="fas fa-lock"></i> City of birth <strong>${escapeHtml(card.locked.cityOfBirth)}</strong></span>
+            <span class="edit-locked-item"><i class="fas fa-lock"></i> Place of birth <strong>${escapeHtml(card.locked.cityOfBirth)}</strong></span>
             ${card.locked.isRehire ? '<span class="badge badge-rehire">Rehire</span>' : ''}
             <span class="edit-locked-note">Locked because they make up the control number. If one is wrong, make a new card.</span>`;
         for (const key of ['lastName', 'firstName', 'middleInitial']) {

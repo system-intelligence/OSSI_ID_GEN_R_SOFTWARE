@@ -64,6 +64,19 @@ On an installed PC the app keeps its working files in **`Documents\OSSI ID Gener
 These files survive updates and uninstalling. To move existing records to that PC, copy the `data\` folder
 (and `ID\` for the saved cards) into `Documents\OSSI ID Generator\` before starting the app.
 
+## Control number and place of birth
+
+A control number is `YYMMDD` (hire date) + a 3-letter **place of birth** code + `-` 4 digits, plus `-RH` for rehires,
+e.g. `260627PAM-0950`.
+
+- New cards use the **province of birth** (82 provinces + Metro Manila), so employees born in towns, barangays or
+  rural areas are covered. Codes are the official **ISO 3166-2:PH** province codes (e.g. PAM Pampanga, CEB Cebu,
+  BEN Benguet); Metro Manila, which has no ISO letter code, is **NCR**. List: `src-tauri/src/provinces.rs`.
+- Cards made earlier used a **city** code (e.g. ANG for Angeles City). They keep their numbers and can always be
+  viewed and printed. The city list is no longer part of the app; databases that already had it keep it, so on
+  those PCs older cards can still be edited too.
+- Tests make the build fail if the list is not 83 entries, or a code is not exactly 3 letters or is used twice.
+
 ## Scanning an ID card's QR code
 
 The QR on the back of each ID holds its control number. **Records → Scan QR** opens the camera, reads the QR
@@ -79,7 +92,7 @@ and opens that card (preview, history, Edit, Print).
 
 **Records → View → Edit** fixes a misspelling or updates details without making a new card:
 
-- The **control number never changes**, so **hire date and city of birth are locked** (they make up the number).
+- The **control number never changes**, so **hire date and place of birth are locked** (they make up the number).
   If one of those is wrong, make a new card instead.
 - The photo and signatures are kept from the saved card; **Replace** swaps them.
 - Saving regenerates the front and back in place and records every change (from → to) in the card's history.

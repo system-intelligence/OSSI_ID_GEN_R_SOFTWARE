@@ -172,7 +172,7 @@
                             <div class="form-card-icon"><i class="fas fa-hashtag"></i></div>
                             <div>
                                 <h3>Control Number</h3>
-                                <p>Generated from the hire date and city of birth</p>
+                                <p>Generated from the hire date and province of birth</p>
                             </div>
                         </div>
                         <div class="form-grid">
@@ -188,24 +188,24 @@
                                 <span class="field-hint">Year / Month / Day</span>
                             </div>
                             <div class="field">
-                                <label>City of Birth</label>
+                                <label>Province of Birth</label>
                                 <div class="select-wrapper" id="city-wrapper">
                                     <div class="select-trigger" id="city-trigger" tabindex="0">
-                                        <span class="select-text">Select city</span>
+                                        <span class="select-text">Select province</span>
                                         <img src="../icons/chevron.png" class="chevron" alt="">
                                     </div>
                                     <select id="city-select" class="hidden-select">
-                                        <option value="">Select city</option>
+                                        <option value="">Select province</option>
                                     </select>
                                     <div class="select-options searchable">
                                         <div class="select-search">
                                             <i class="fas fa-search"></i>
-                                            <input type="text" class="select-search-input" placeholder="Search city..." autocomplete="off" aria-label="Search city">
+                                            <input type="text" class="select-search-input" placeholder="Search province..." autocomplete="off" aria-label="Search province">
                                         </div>
                                         <div id="city-options">
-                                            <div class="option" data-value="">Select city</div>
+                                            <div class="option" data-value="">Select province</div>
                                         </div>
-                                        <div class="select-no-results" hidden>No city matches your search</div>
+                                        <div class="select-no-results" hidden>No province matches your search</div>
                                     </div>
                                 </div>
                             </div>
@@ -403,7 +403,7 @@
                                         <th data-sort="position">Position</th>
                                         <th data-sort="controlNumber">Control No.</th>
                                         <th data-sort="hireDate">Hire Date</th>
-                                        <th data-sort="cityOfBirth">City of Birth</th>
+                                        <th data-sort="cityOfBirth" title="Province of birth (older cards, made before the switch to provinces, show the city)">Place of Birth</th>
                                         <th data-sort="isRehire">Rehire</th>
                                         <th>Cards</th>
                                         <th data-sort="printCount" title="Times sent to the printer (front / back)">Printed</th>

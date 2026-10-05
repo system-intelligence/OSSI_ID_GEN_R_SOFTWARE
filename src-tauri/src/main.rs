@@ -2,13 +2,13 @@
 // The UI in ../ui is the same HTML/CSS/JS; it calls these commands through window.__TAURI__.core.invoke.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod cities;
 mod db;
 mod edit;
 mod format;
 mod images;
 mod paths;
 mod printer;
+mod provinces;
 mod qr;
 mod textfit;
 mod transfer;
@@ -102,20 +102,22 @@ fn verify_pin(state: State<AppState>, pin: Value) -> Value {
     json!({ "success": js_string(Some(&pin)) == js_string(config.get("pin")) })
 }
 
-// ---------- cities, control numbers, records ----------
+// ---------- place of birth, control numbers, records ----------
 
+// Provinces for the Place of Birth dropdown (new cards use province codes; see provinces.rs)
 #[tauri::command]
-fn get_cities(state: State<AppState>) -> Vec<Value> {
-    state.db.get_all_cities().unwrap_or_else(|err| {
-        eprintln!("get-cities error: {err}");
+fn get_provinces(state: State<AppState>) -> Vec<Value> {
+    state.db.get_all_provinces().unwrap_or_else(|err| {
+        eprintln!("get-provinces error: {err}");
         Vec::new()
     })
 }
 
+// Code of a province (or, for cards made before the switch, a city)
 #[tauri::command]
-fn get_city_code(state: State<AppState>, city_name: Option<String>) -> Option<String> {
-    state.db.get_city_code(city_name.as_deref().unwrap_or("")).unwrap_or_else(|err| {
-        eprintln!("get-city-code error: {err}");
+fn get_place_code(state: State<AppState>, place_name: Option<String>) -> Option<String> {
+    state.db.get_place_code(place_name.as_deref().unwrap_or("")).unwrap_or_else(|err| {
+        eprintln!("get-place-code error: {err}");
         None
     })
 }
@@ -185,14 +187,14 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
 
         let (hire_date, city_of_birth) = (text(data, "hireDate"), text(data, "cityOfBirth"));
         if hire_date.is_empty() || city_of_birth.is_empty() {
-            return Err("Enter Hire Date and City of Birth to generate the control number".into());
+            return Err("Enter Hire Date and Province of Birth to generate the control number".into());
         }
         let city_code = db
-            .get_city_code(city_of_birth)
+            .get_place_code(city_of_birth)
             .map_err(err)?
-            .ok_or_else(|| format!("No city code found for {city_of_birth}"))?;
+            .ok_or_else(|| format!("No code found for place of birth {city_of_birth}"))?;
         let is_rehire = flag(data, "isRehire");
-        // Prefix is YYMMDD + city code, e.g. 2026-06-27 in Angeles -> 260627ANG
+        // Prefix is YYMMDD + place code, e.g. 2026-06-27 in Pampanga -> 260627PAM (older cards: city code, e.g. ANG)
         let prefix = format!("{}{city_code}", hire_date.replace('-', "").chars().skip(2).collect::<String>());
 
         // Reuse the number already issued in this session when regenerating, so each ID keeps one number
@@ -244,7 +246,7 @@ fn generate_card(state: &AppState, data: &Value) -> Result<Value, String> {
             return Err("Download the Front ID first - the back is filed under its control number".into());
         }
         let city_of_birth = text(data, "cityOfBirth");
-        let city_code = if city_of_birth.is_empty() { None } else { db.get_city_code(city_of_birth).map_err(err)? };
+        let city_code = if city_of_birth.is_empty() { None } else { db.get_place_code(city_of_birth).map_err(err)? };
         let authorized_signature = load_authorized_signature(state)?;
         let (address1, address2) = (text(data, "addressLine1"), text(data, "addressLine2"));
         folder = format!("{control_number}_{}_{}", text(data, "surname"), text(data, "firstName"));
@@ -653,8 +655,8 @@ fn main() {
             check_pin_setup,
             setup_pin,
             verify_pin,
-            get_cities,
-            get_city_code,
+            get_provinces,
+            get_place_code,
             generate_control_number,
             get_all_records,
             reset_database,
@@ -729,7 +731,7 @@ mod tests {
         let front = generate_card(
             pc,
             &json!({ "isFront": true, "firstName": first, "lastName": last, "position": "SECURITY GUARD",
-                     "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY" }),
+                     "hireDate": "2026-06-27", "cityOfBirth": "PAMPANGA" }),
         )
         .unwrap();
         let control = front["controlNumber"].as_str().unwrap().to_string();
@@ -737,7 +739,7 @@ mod tests {
             pc,
             &json!({ "isFront": false, "controlNumber": control, "name": "Maria Cruz", "relationship": "Mother",
                      "addressLine1": "123 Rizal St", "addressLine2": "Quezon City", "contact": "09171234567",
-                     "surname": last, "firstName": first, "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY" }),
+                     "surname": last, "firstName": first, "hireDate": "2026-06-27", "cityOfBirth": "PAMPANGA" }),
         )
         .unwrap();
         control
@@ -813,7 +815,7 @@ mod tests {
         let front = generate_card(
             &pc,
             &json!({ "isFront": true, "firstName": "JUAN", "lastName": "DELA CRSU", "position": "SECURITY GUARD",
-                     "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY", "idPicture": photo }),
+                     "hireDate": "2026-06-27", "cityOfBirth": "PAMPANGA", "idPicture": photo }),
         )
         .unwrap();
         let control = front["controlNumber"].as_str().unwrap().to_string();
@@ -821,7 +823,7 @@ mod tests {
             &pc,
             &json!({ "isFront": false, "controlNumber": control, "name": "Maria Cruz", "relationship": "Mother",
                      "addressLine1": "123 Rizal St", "addressLine2": "Quezon City", "contact": "0917123456",
-                     "surname": "DELA CRSU", "firstName": "JUAN", "hireDate": "2026-06-27", "cityOfBirth": "ANGELES CITY" }),
+                     "surname": "DELA CRSU", "firstName": "JUAN", "hireDate": "2026-06-27", "cityOfBirth": "PAMPANGA" }),
         )
         .unwrap();
         pc.db.log_print(&control, "front", "", "SMART-51").unwrap();
@@ -875,16 +877,16 @@ mod tests {
             first_name: "ANA",
             last_name: "REYES",
             hire_date: "2026-06-27",
-            city_of_birth: "ANGELES CITY",
-            control_number: "260627ANG-0001",
+            city_of_birth: "PAMPANGA",
+            control_number: "260627PAM-0001",
             ..Default::default()
         };
         pc.db.save_id_record("front", &record).unwrap();
-        pc.db.mark_sent_out(&["260627ANG-0001".to_string()], "").unwrap();
-        assert_eq!(edit::load(&pc, "260627ANG-0001").unwrap()["sentOut"], true);
-        let refused = edit::save(&pc, "260627ANG-0001", &json!({ "lastName": "REYES-CRUZ" })).unwrap_err();
+        pc.db.mark_sent_out(&["260627PAM-0001".to_string()], "").unwrap();
+        assert_eq!(edit::load(&pc, "260627PAM-0001").unwrap()["sentOut"], true);
+        let refused = edit::save(&pc, "260627PAM-0001", &json!({ "lastName": "REYES-CRUZ" })).unwrap_err();
         assert!(refused.contains("sent to another PC"), "{refused}");
-        assert!(pc.db.card_edits("260627ANG-0001").unwrap().is_empty());
+        assert!(pc.db.card_edits("260627PAM-0001").unwrap().is_empty());
         drop(pc);
         let _ = fs::remove_dir_all(work);
     }
@@ -911,6 +913,30 @@ mod tests {
         drop((pc_a, pc_b));
         let _ = fs::remove_dir_all(work_a);
         let _ = fs::remove_dir_all(work_b);
+    }
+
+    #[test]
+    fn new_cards_use_province_codes() {
+        let (pc, work) = test_pc("province");
+        let front = |place: &str| {
+            generate_card(
+                &pc,
+                &json!({ "isFront": true, "firstName": "JUAN", "lastName": "CRUZ", "position": "SECURITY OFFICER",
+                         "hireDate": "2026-06-27", "cityOfBirth": place }),
+            )
+            .unwrap()["controlNumber"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(front("PAMPANGA").starts_with("260627PAM-"));
+        assert!(front("Metro Manila").starts_with("260627NCR-"));
+        assert!(front("DAVAO DE ORO").starts_with("260627COM-")); // ISO keeps the old Compostela Valley code
+        assert!(generate_card(&pc, &json!({ "isFront": true, "firstName": "A", "lastName": "B", "hireDate": "2026-06-27", "cityOfBirth": "ATLANTIS" }))
+            .unwrap_err()
+            .contains("No code found for place of birth"));
+        drop(pc);
+        let _ = fs::remove_dir_all(work);
     }
 
     #[test]

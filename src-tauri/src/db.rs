@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::cities::CITIES;
+use crate::provinces::PROVINCES;
 
 pub struct Db(Mutex<Connection>);
 
@@ -65,6 +65,9 @@ impl Db {
     fn init(&self) -> rusqlite::Result<()> {
         let mut conn = self.conn();
 
+        // Cards made before the switch to provinces used a city code (e.g. ANG for Angeles City). The city list
+        // is no longer part of the app, but databases that already have it keep it, so those older cards can
+        // still be edited with their original code. New databases get an empty table.
         conn.execute(
             "CREATE TABLE IF NOT EXISTS cities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,12 +76,22 @@ impl Db {
             )",
             [],
         )?;
+
+        // Province of birth: used by every new card (see provinces.rs)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS provinces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                code TEXT UNIQUE NOT NULL
+            )",
+            [],
+        )?;
         let tx = conn.transaction()?;
         {
-            let mut stmt = tx.prepare("INSERT OR IGNORE INTO cities (name, code) VALUES (?, ?)")?;
-            for (name, code) in CITIES {
+            let mut stmt = tx.prepare("INSERT OR IGNORE INTO provinces (name, code) VALUES (?, ?)")?;
+            for (name, code) in PROVINCES {
                 if let Err(err) = stmt.execute(params![name, code]) {
-                    eprintln!("City insert error: {err}");
+                    eprintln!("Province insert error: {err}");
                 }
             }
         }
@@ -179,22 +192,29 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_all_cities(&self) -> rusqlite::Result<Vec<Value>> {
+    // Provinces offered in the Place of Birth dropdown for new cards
+    pub fn get_all_provinces(&self) -> rusqlite::Result<Vec<Value>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT name, code FROM cities ORDER BY name ASC")?;
+        let mut stmt = conn.prepare("SELECT name, code FROM provinces ORDER BY name ASC")?;
         let rows = stmt.query_map([], |row| {
             Ok(json!({ "name": row.get::<_, String>(0)?, "code": row.get::<_, String>(1)? }))
         })?;
         rows.collect()
     }
 
-    pub fn get_city_code(&self, city_name: &str) -> rusqlite::Result<Option<String>> {
-        if city_name.is_empty() {
+    // Code of a place of birth: a province (new cards), or - only for cards made before provinces were used -
+    // a city already stored in this database. Provinces are checked first.
+    pub fn get_place_code(&self, place_name: &str) -> rusqlite::Result<Option<String>> {
+        if place_name.is_empty() {
             return Ok(None);
         }
-        self.conn()
-            .query_row("SELECT code FROM cities WHERE name = ?", [city_name.to_uppercase()], |row| row.get(0))
-            .optional()
+        let name = place_name.to_uppercase();
+        let conn = self.conn();
+        let province = conn.query_row("SELECT code FROM provinces WHERE name = ?", [&name], |row| row.get(0)).optional()?;
+        match province {
+            Some(code) => Ok(Some(code)),
+            None => conn.query_row("SELECT code FROM cities WHERE name = ?", [&name], |row| row.get(0)).optional(),
+        }
     }
 
     // Random 4-digit sequence not yet used for this prefix, e.g. 260627ANG-0950 (or ...-0950-RH)
@@ -719,6 +739,16 @@ mod tests {
         assert!(named.iter().all(|e| e["name"] == "JIRRUM D. EDICA"));
         assert!(named.iter().any(|e| e["isReprint"] == true && e["reason"] == "Lost"));
         assert_eq!(log.iter().find(|e| e["controlNumber"] == "999999XXX-0000").unwrap()["name"], "");
+    }
+
+    #[test]
+    fn older_city_cards_still_resolve_from_an_existing_city_table() {
+        let db = memory_db();
+        assert_eq!(db.get_place_code("PAMPANGA").unwrap().as_deref(), Some("PAM"));
+        assert_eq!(db.get_place_code("ANGELES CITY").unwrap(), None); // new database: no cities
+        // A database from before the switch still has its city list
+        db.conn().execute("INSERT INTO cities (name, code) VALUES ('ANGELES CITY', 'ANG')", []).unwrap();
+        assert_eq!(db.get_place_code("Angeles City").unwrap().as_deref(), Some("ANG"));
     }
 
     #[test]

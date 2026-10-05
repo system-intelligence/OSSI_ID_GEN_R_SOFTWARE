@@ -113,9 +113,9 @@ pub fn save(state: &AppState, control_number: &str, changes: &Value) -> Result<V
     // The regenerated card must keep this exact control number
     let city_code = state
         .db
-        .get_city_code(&city_of_birth)
+        .get_place_code(&city_of_birth)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("No city code found for {city_of_birth}"))?;
+        .ok_or_else(|| format!("No code found for place of birth {city_of_birth}"))?;
     let prefix = format!("{}{city_code}-", hire_date.replace('-', "").chars().skip(2).collect::<String>());
     if !control_number.starts_with(&prefix) || control_number.ends_with("-RH") != is_rehire {
         return Err("This card's control number does not match its hire date and city, so it cannot be edited".into());
