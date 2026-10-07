@@ -1863,18 +1863,43 @@ function stopCamera() {
     scanVideo.srcObject = null;
 }
 
-// Reads one frame; a smaller copy is enough for jsQR and much faster
+// Reads one frame. The card's QR is only 1.3 cm wide, so on a laptop webcam it is small in the picture:
+// the centre square (where the guide is) is read at full camera resolution - shrinking the frame made the
+// QR squares too small to decode - and every 3rd frame the whole picture, in case the card is off-centre.
+// Both polarities are tried (dark-on-light and light-on-dark).
+let scanTick = 0;
 function readFrame() {
     if (scanBusy || scanVideo.readyState < 2 || !scanVideo.videoWidth) return;
-    const scale = Math.min(1, 800 / scanVideo.videoWidth);
-    const w = Math.round(scanVideo.videoWidth * scale);
-    const h = Math.round(scanVideo.videoHeight * scale);
+    const vw = scanVideo.videoWidth;
+    const vh = scanVideo.videoHeight;
+    scanTick++;
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (scanTick % 3 !== 0) {
+        const side = Math.round(Math.min(vw, vh) * 0.8);
+        sx = Math.round((vw - side) / 2);
+        sy = Math.round((vh - side) / 2);
+        sw = sh = side;
+    }
+    const scale = Math.min(1, 1280 / sw); // only very large (4K) frames are reduced
+    const w = Math.round(sw * scale);
+    const h = Math.round(sh * scale);
     scanCanvas.width = w;
     scanCanvas.height = h;
     const ctx = scanCanvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(scanVideo, 0, 0, w, h);
-    const code = window.jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'dontInvert' });
+    ctx.drawImage(scanVideo, sx, sy, sw, sh, 0, 0, w, h);
+    const code = window.jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'attemptBoth' });
     if (code && code.data) handleScanned(code.data);
+}
+
+// Webcams that support it are switched to continuous autofocus, which keeps a close-up card sharp
+async function enableAutofocus(stream) {
+    try {
+        const track = stream.getVideoTracks()[0];
+        const modes = (track.getCapabilities && track.getCapabilities().focusMode) || [];
+        if (modes.includes('continuous')) await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+    } catch (err) {
+        console.warn('Autofocus not available:', err);
+    }
 }
 
 async function startCamera() {
@@ -1883,13 +1908,16 @@ async function startCamera() {
     setScanStatus('Starting camera...');
     try {
         scanStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+            // highest resolution the webcam offers (up to 1080p): more pixels on the small QR
+            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
             audio: false
         });
         if (scanModal.style.display === 'none') { stopCamera(); return; } // closed while starting
+        enableAutofocus(scanStream);
         scanVideo.srcObject = scanStream;
         await scanVideo.play();
-        setScanStatus('Hold the QR code on the back of the ID card inside the frame.');
+        scanTick = 0;
+        setScanStatus('Hold the back of the ID card about 10-15 cm from the camera, with the QR inside the frame. Good light helps.');
         scanTimer = setInterval(readFrame, 200);
     } catch (err) {
         stopCamera();
